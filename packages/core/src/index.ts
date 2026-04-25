@@ -3,6 +3,9 @@
  * Self-evolving agents with distributed storage on 0G
  */
 
+export { ToolRegistry } from './storage/tool-registry.js';
+export type { Tool } from './storage/tool-registry.js';
+
 export interface AgentConfig {
   name: string;
   description?: string;
