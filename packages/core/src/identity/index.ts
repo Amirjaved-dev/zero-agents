@@ -1,3 +1,3 @@
 export { ENSIdentityManager } from './ens-identity-manager.js'
 export type { ENSIdentityManagerConfig } from './ens-identity-manager.js'
-export type { AgentProfile } from './types.js'
+export type { AgentIdentityProvider, AgentProfile } from './types.js'

@@ -2,15 +2,13 @@ import { EventEmitter } from 'node:events';
 import { EvolutionEngine, type EvolutionEvent } from './evolution-engine.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
-import { ENSIdentityManager } from './identity/ens-identity-manager.js';
-import type { AgentProfile } from './identity/types.js';
+import type { AgentIdentityProvider, AgentProfile } from './identity/types.js';
 
 export interface SelfEvolvingAgentConfig {
   name: string;
-  ensName?: string;
-  ensPrivateKey?: string;
   description?: string;
   capabilities?: string[];
+  identity?: AgentIdentityProvider;
   zeroGPrivateKey: string;
   openAiKey?: string;
 }
@@ -47,7 +45,6 @@ export interface AgentStepEvent {
 
 export class SelfEvolvingAgent extends EventEmitter {
   readonly name: string;
-  readonly ensName?: string;
   readonly description: string;
   readonly capabilities: string[];
 
@@ -55,15 +52,15 @@ export class SelfEvolvingAgent extends EventEmitter {
   private readonly sandbox: ToolSandbox;
   private readonly evolutionEngine: EvolutionEngine;
   private readonly state: AgentState;
-  private readonly identityManager?: ENSIdentityManager;
+  private readonly identity?: AgentIdentityProvider;
 
   constructor(config: SelfEvolvingAgentConfig | AgentConfig) {
     super();
 
     this.name = config.name;
-    this.ensName = 'ensName' in config ? config.ensName : undefined;
     this.description = config.description ?? '';
     this.capabilities = 'capabilities' in config ? config.capabilities ?? [] : [];
+    this.identity = 'identity' in config ? config.identity : undefined;
     this.state = {
       iteration: 0,
       lastUpdate: Date.now(),
@@ -82,14 +79,6 @@ export class SelfEvolvingAgent extends EventEmitter {
     this.sandbox = new ToolSandbox();
     this.evolutionEngine = new EvolutionEngine(undefined, this.sandbox, undefined, this.registry);
     this.evolutionEngine.on('step', (event) => this.emitStep(event));
-
-    if ('ensName' in config && config.ensName && 'ensPrivateKey' in config && config.ensPrivateKey) {
-      this.identityManager = new ENSIdentityManager({
-        ensName: config.ensName,
-        privateKey: config.ensPrivateKey
-      });
-      this.initializeAgentProfile();
-    }
   }
 
   override on(eventName: 'step', listener: (event: AgentStepEvent) => void): this;
@@ -112,6 +101,12 @@ export class SelfEvolvingAgent extends EventEmitter {
   async evolve(): Promise<void> {
     this.state.iteration += 1;
     this.state.lastUpdate = Date.now();
+  }
+
+  async publishProfile(toolRegistryHash = ''): Promise<void> {
+    if (!this.identity) return;
+
+    await this.identity.setProfile(this.createAgentProfile(toolRegistryHash));
   }
 
   async handleTask(task: TaskRequest): Promise<TaskResult> {
@@ -164,21 +159,12 @@ export class SelfEvolvingAgent extends EventEmitter {
     return [...tools].sort((a, b) => b.successRate - a.successRate || b.usageCount - a.usageCount)[0] ?? null;
   }
 
-  private async initializeAgentProfile(): Promise<void> {
-    if (!this.identityManager || !this.ensName) return;
-
-    const profile: AgentProfile = {
+  private createAgentProfile(toolRegistryHash: string): AgentProfile {
+    return {
       description: this.description,
       capabilities: this.capabilities,
-      toolRegistryHash: ''
+      toolRegistryHash
     };
-
-    try {
-      await this.identityManager.setAgentProfile(profile);
-      console.log(`ENS profile initialized for ${this.ensName}`);
-    } catch (error) {
-      console.warn('Failed to initialize ENS profile:', error);
-    }
   }
 
   private async recordToolResult(tool: Tool, succeeded: boolean): Promise<void> {
@@ -190,15 +176,14 @@ export class SelfEvolvingAgent extends EventEmitter {
 
     await this.registry.saveTool(tool);
 
-    if (this.identityManager && tool.rootHash) {
+    if (this.identity) {
       try {
-        await this.identityManager.setAgentProfile({
-          description: this.description,
-          capabilities: this.capabilities,
-          toolRegistryHash: tool.rootHash
-        });
+        const indexRootHash = await this.registry.getIndexRootHash();
+        if (indexRootHash) {
+          await this.identity.setToolRegistryHash(indexRootHash);
+        }
       } catch (error) {
-        console.warn('Failed to sync toolRegistryHash to ENS:', error);
+        console.warn('Failed to sync toolRegistryHash to identity provider:', error);
       }
     }
   }

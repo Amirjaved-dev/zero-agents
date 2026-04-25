@@ -2,7 +2,7 @@ import { createPublicClient, createWalletClient, http, getContract } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { sepolia } from 'viem/chains'
 import { namehash, normalize } from 'viem/ens'
-import type { AgentProfile } from './types.js'
+import type { AgentIdentityProvider, AgentProfile } from './types.js'
 
 const PUBLIC_RESOLVER_ADDRESS = '0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5' as const
 
@@ -43,7 +43,7 @@ export interface ENSIdentityManagerConfig {
   rpcUrl?: string
 }
 
-export class ENSIdentityManager {
+export class ENSIdentityManager implements AgentIdentityProvider {
   readonly ensName: string
   private readonly account
   private readonly publicClient
@@ -102,6 +102,43 @@ export class ENSIdentityManager {
 
   async getAXLPeerId(): Promise<string | null> {
     return this.getTextRecord('zeroagent.axlPeerId')
+  }
+
+  async getProfile(): Promise<AgentProfile | null> {
+    const [description, capabilities, toolRegistryHash, axlPeerId, url] = await Promise.all([
+      this.getTextRecord('description'),
+      this.getCapabilities(),
+      this.getToolRegistryHash(),
+      this.getAXLPeerId(),
+      this.getTextRecord('url')
+    ])
+
+    if (!description && capabilities.length === 0 && !toolRegistryHash && !axlPeerId && !url) {
+      return null
+    }
+
+    return {
+      description: description ?? '',
+      capabilities,
+      toolRegistryHash: toolRegistryHash ?? '',
+      axlPeerId: axlPeerId ?? undefined,
+      url: url ?? undefined
+    }
+  }
+
+  async setProfile(profile: AgentProfile): Promise<void> {
+    await this.setAgentProfile(profile)
+  }
+
+  async setToolRegistryHash(rootHash: string): Promise<void> {
+    const profile = await this.getProfile()
+    await this.setAgentProfile({
+      description: profile?.description ?? '',
+      capabilities: profile?.capabilities ?? [],
+      toolRegistryHash: rootHash,
+      axlPeerId: profile?.axlPeerId,
+      url: profile?.url
+    })
   }
 
   async setAgentProfile(profile: AgentProfile): Promise<void> {

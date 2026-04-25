@@ -5,3 +5,10 @@ export interface AgentProfile {
   axlPeerId?: string
   url?: string
 }
+
+export interface AgentIdentityProvider {
+  getProfile(): Promise<AgentProfile | null>
+  setProfile(profile: AgentProfile): Promise<void>
+  getToolRegistryHash(): Promise<string | null>
+  setToolRegistryHash(rootHash: string): Promise<void>
+}

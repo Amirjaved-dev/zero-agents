@@ -68,6 +68,10 @@ export class ToolRegistry {
     return this.getTool(rootHash);
   }
 
+  async getIndexRootHash(): Promise<string | null> {
+    return this.readIndexPointer();
+  }
+
   async searchTools(query: string): Promise<Tool[]> {
     const normalizedQuery = query.trim().toLowerCase();
     const index = await this.loadIndex();
@@ -87,7 +91,7 @@ export class ToolRegistry {
       .map((result) => result.tool);
   }
 
-  async updateIndex(tool: Tool): Promise<void> {
+  async updateIndex(tool: Tool): Promise<string> {
     if (!tool.rootHash) {
       throw new Error('Cannot update tool index without a rootHash');
     }
@@ -99,6 +103,7 @@ export class ToolRegistry {
     const indexRootHash = await uploadToZeroG(indexFile);
 
     await this.writeIndexPointer(indexRootHash);
+    return indexRootHash;
   }
 
   async loadIndex(): Promise<Map<string, string>> {

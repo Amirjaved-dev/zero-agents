@@ -4,7 +4,7 @@ import { sepolia } from 'viem/chains';
 import { ENSIdentityManager } from '../packages/core/dist/identity/ens-identity-manager.js';
 import { SelfEvolvingAgent } from '../packages/core/dist/index.js';
 
-const SEPOLIA_RPC = 'https://sepolia.drpc.org';
+const SEPOLIA_RPC = process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
 
 function loadEnvFile(filePath = '.env'): void {
   if (!existsSync(filePath)) return;
@@ -38,8 +38,9 @@ async function main(): Promise<void> {
   loadEnvFile();
   log('SETUP', '=== ENSIdentityManager Integration Test ===\n');
 
-  const privateKey = process.env.ZERO_G_PRIVATE_KEY || process.env.ENS_PRIVATE_KEY;
+  const privateKey = process.env.ENS_PRIVATE_KEY || process.env.ZERO_G_PRIVATE_KEY;
   const fullKey = privateKey ? (privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`) : undefined;
+  const ownedEnsName = process.env.ENS_NAME;
 
   const publicClient = createPublicClient({
     chain: sepolia,
@@ -168,24 +169,53 @@ async function main(): Promise<void> {
 
   if (fullKey) {
     log('TEST', '\n=== WRITE TESTS (requires owned ENS name) ===\n');
-    log('TEST', '⚠️ Skipping write tests — no owned ENS name available.');
-    log('TEST', 'To test setAgentProfile(): register a .eth name on sepolia.app.ens.domains first.');
-    log('TEST', 'Then re-run with that name.');
+
+    if (!ownedEnsName) {
+      log('TEST', 'Skipping write tests — set ENS_NAME to an ENS name controlled by ENS_PRIVATE_KEY.');
+    } else {
+      const mgr = new ENSIdentityManager({
+        ensName: ownedEnsName,
+        privateKey: fullKey,
+        rpcUrl: SEPOLIA_RPC
+      });
+
+      const capabilities = ['test-cap', 'tool-generation'];
+      await mgr.setAgentProfile({
+        description: 'ZeroAgent ENS integration test agent',
+        capabilities,
+        toolRegistryHash: 'test-registry-hash',
+        axlPeerId: 'test-axl-peer-id',
+        url: 'https://github.com/zero-agent/test'
+      });
+
+      assert('setAgentProfile() writes capabilities', JSON.stringify(await mgr.getCapabilities()) === JSON.stringify(capabilities));
+      assert('setAgentProfile() writes tool registry hash', await mgr.getToolRegistryHash() === 'test-registry-hash');
+      assert('setAgentProfile() writes AXL peer ID', await mgr.getAXLPeerId() === 'test-axl-peer-id');
+    }
 
     log('TEST', '\n--- Test 8: SelfEvolvingAgent integration (init only) ---');
     try {
-      const agent = new SelfEvolvingAgent({
+      const identity = ownedEnsName
+        ? new ENSIdentityManager({
+            ensName: ownedEnsName,
+            privateKey: fullKey,
+            rpcUrl: SEPOLIA_RPC
+          })
+        : undefined;
+
+      const agentConfig = {
         name: 'test-research-agent',
-        ensName: 'test-agent.eth',
-        ensPrivateKey: fullKey,
         description: 'Test agent',
         capabilities: ['test-cap'],
+        identity,
         zeroGPrivateKey: fullKey,
         openAiKey: process.env.OPENAI_API_KEY
-      });
-      assert('SelfEvolvingAgent accepts ensPrivateKey', agent.ensName === 'test-agent.eth');
-      assert('identityManager initialized on agent', !!(agent as any).identityManager);
-      console.log(`     → Agent: ${agent.name}, ENS: ${agent.ensName}, hasIdentity: ${!!(agent as any).identityManager}`);
+      };
+
+      const agent = new SelfEvolvingAgent(agentConfig);
+      await agent.publishProfile();
+      assert('SelfEvolvingAgent accepts injected identity provider', agent.name === 'test-research-agent');
+      console.log(`     → Agent: ${agent.name}, injectedIdentity: ${!!identity}`);
     } catch (err) {
       assert('SelfEvolvingAgent integration', false, err instanceof Error ? err.message : String(err));
     }

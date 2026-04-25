@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { SelfEvolvingAgent } from '../packages/core/dist/index.js';
+import { ENSIdentityManager, SelfEvolvingAgent } from '../packages/core/dist/index.js';
 
 const TASK_DESCRIPTION = 'fetch the current price of ETH from CoinGecko API and return it as a number';
 
@@ -24,6 +24,8 @@ async function main(): Promise<void> {
   loadEnvFile();
 
   const zeroGPrivateKey = process.env.ZERO_G_PRIVATE_KEY;
+  const ensPrivateKey = process.env.ENS_PRIVATE_KEY ?? zeroGPrivateKey;
+  const ensName = process.env.ENS_NAME;
 
   if (!zeroGPrivateKey) {
     console.log('Skipping agent integration test: ZERO_G_PRIVATE_KEY environment variable not set.');
@@ -31,14 +33,23 @@ async function main(): Promise<void> {
     return;
   }
 
+  const identity = ensName
+    ? new ENSIdentityManager({
+        ensName,
+        privateKey: ensPrivateKey
+      })
+    : undefined;
+
   const agent = new SelfEvolvingAgent({
-    name: 'research-agent.eth',
-    ensName: 'research-agent.eth',
+    name: ensName ?? 'research-agent',
     description: 'Research agent that evolves tools on demand.',
     capabilities: ['tool-generation', 'price-research'],
+    identity,
     zeroGPrivateKey,
     openAiKey: process.env.OPENAI_API_KEY
   });
+
+  await agent.publishProfile();
 
   agent.on('step', (event) => {
     const data = event.data ? ` ${JSON.stringify(event.data)}` : '';
