@@ -4,7 +4,6 @@ import { sepolia } from 'viem/chains'
 import { namehash, normalize } from 'viem/ens'
 import type { AgentProfile } from './types.js'
 
-const ENS_REGISTRY_ADDRESS = '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e' as const
 const PUBLIC_RESOLVER_ADDRESS = '0x231b0Ee14048e9dCcD1d247744d114a4EB5E8E63' as const
 
 const RESOLVER_ABI = [
@@ -73,7 +72,7 @@ export class ENSIdentityManager {
 
   async resolveAddress(): Promise<string | null> {
     try {
-      const address = await this.publicClient.getAddress({
+      const address = await this.publicClient.getEnsAddress({
         name: this.ensName
       })
       return address ?? null

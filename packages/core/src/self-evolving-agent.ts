@@ -83,7 +83,7 @@ export class SelfEvolvingAgent extends EventEmitter {
     this.evolutionEngine = new EvolutionEngine(undefined, this.sandbox, undefined, this.registry);
     this.evolutionEngine.on('step', (event) => this.emitStep(event));
 
-    if (config.ensName && config.ensPrivateKey) {
+    if ('ensName' in config && config.ensName && 'ensPrivateKey' in config && config.ensPrivateKey) {
       this.identityManager = new ENSIdentityManager({
         ensName: config.ensName,
         privateKey: config.ensPrivateKey
