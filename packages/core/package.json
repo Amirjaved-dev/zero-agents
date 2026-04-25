@@ -10,18 +10,20 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "@0glabs/0g-ts-sdk": "^0.2.0",
+    "@0gfoundation/0g-ts-sdk": "^1.2.6",
     "@0glabs/0g-serving-broker": "^0.7.5",
     "ethers": "^6.10.0",
+    "isolated-vm": "^6.1.2",
     "openai": "^4.26.0",
-    "viem": "^2.8.0",
-    "isolated-vm": "^6.1.2"
+    "viem": "^2.8.0"
   },
   "devDependencies": {
     "typescript": "^5.3.3"

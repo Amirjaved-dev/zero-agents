@@ -3,7 +3,7 @@
  * Handles upload and download of agent state from 0G distributed storage
  */
 
-import { Indexer, MemData } from '@0glabs/0g-ts-sdk';
+import { Indexer, MemData } from '@0gfoundation/0g-ts-sdk';
 import { JsonRpcProvider, Wallet } from 'ethers';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,9 @@ import { join } from 'node:path';
 
 const BLOCKCHAIN_RPC = 'https://evmrpc-testnet.0g.ai';
 const IND_RPC = 'https://indexer-storage-testnet-turbo.0g.ai';
+
+type IndexerUploadSigner = Parameters<Indexer['upload']>[2];
+type UploadResponse = string | { rootHash: string; txHash?: string } | { rootHashes: string[]; txHashes?: string[] };
 
 /**
  * Upload data to 0G storage
@@ -36,17 +39,31 @@ export async function uploadToZeroG(data: object): Promise<string> {
 
   // Upload to 0G via Indexer
   const indexer = new Indexer(IND_RPC);
-  const [rootHash, error] = await indexer.upload(memData, BLOCKCHAIN_RPC, signer);
+  const [uploadResponse, error] = await indexer.upload(memData, BLOCKCHAIN_RPC, signer as unknown as IndexerUploadSigner);
 
   if (error) {
     throw error;
   }
+
+  const rootHash = rootHashFromUploadResponse(uploadResponse);
 
   if (!rootHash) {
     throw new Error('0G upload did not return a root hash');
   }
 
   return rootHash;
+}
+
+function rootHashFromUploadResponse(uploadResponse: UploadResponse): string {
+  if (typeof uploadResponse === 'string') {
+    return uploadResponse;
+  }
+
+  if ('rootHashes' in uploadResponse) {
+    return uploadResponse.rootHashes[0] ?? '';
+  }
+
+  return uploadResponse.rootHash;
 }
 
 /**
