@@ -4,7 +4,7 @@ import { sepolia } from 'viem/chains'
 import { namehash, normalize } from 'viem/ens'
 import type { AgentProfile } from './types.js'
 
-const PUBLIC_RESOLVER_ADDRESS = '0x231b0Ee14048e9dCcD1d247744d114a4EB5E8E63' as const
+const PUBLIC_RESOLVER_ADDRESS = '0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5' as const
 
 const RESOLVER_ABI = [
   {
