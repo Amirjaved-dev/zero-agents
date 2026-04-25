@@ -30,7 +30,9 @@ export class AgentCoordinator {
     if (this.started) return;
 
     await this.axlClient.startListening((message, fromPeerId) => {
-      void this.handleMessage(message, fromPeerId);
+      void this.handleMessage(message, fromPeerId).catch((error) => {
+        console.warn('Failed to handle AXL message:', error);
+      });
     });
     this.started = true;
   }
