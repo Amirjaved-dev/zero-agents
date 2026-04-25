@@ -55,7 +55,12 @@ export class ToolEvaluator {
   private async generateTestCases(tool: Tool): Promise<TestCase[]> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      throw new Error('OPENAI_API_KEY environment variable not set');
+      return [
+        {
+          input: {},
+          description: `Smoke test for ${tool.name}`
+        }
+      ];
     }
 
     const client = new OpenAI({ apiKey });

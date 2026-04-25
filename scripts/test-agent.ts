@@ -1,19 +1,33 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { SelfEvolvingAgent } from '../packages/core/dist/index.js';
 
 const TASK_DESCRIPTION = 'fetch the current price of ETH from CoinGecko API and return it as a number';
 
+function loadEnvFile(filePath = '.env'): void {
+  if (!existsSync(filePath)) {
+    return;
+  }
+
+  for (const line of readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
+    const match = line.match(/^\s*([^#][^=]+?)\s*=\s*(.*)\s*$/);
+    if (!match) {
+      continue;
+    }
+
+    const key = match[1].trim();
+    const value = match[2].trim().replace(/^['"]|['"]$/g, '');
+    process.env[key] ??= value;
+  }
+}
+
 async function main(): Promise<void> {
+  loadEnvFile();
+
   const zeroGPrivateKey = process.env.ZERO_G_PRIVATE_KEY;
 
   if (!zeroGPrivateKey) {
     console.log('Skipping agent integration test: ZERO_G_PRIVATE_KEY environment variable not set.');
-    console.log('Set ZERO_G_PRIVATE_KEY and OPENAI_API_KEY to run the live two-task cached reuse test.');
-    return;
-  }
-
-  if (!process.env.OPENAI_API_KEY) {
-    console.log('Skipping agent integration test: OPENAI_API_KEY environment variable not set.');
-    console.log('Set ZERO_G_PRIVATE_KEY and OPENAI_API_KEY to run the live two-task cached reuse test.');
+    console.log('Set ZERO_G_PRIVATE_KEY to run the live two-task cached reuse test.');
     return;
   }
 

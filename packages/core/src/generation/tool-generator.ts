@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import OpenAI from 'openai';
 import type { Tool } from '../storage/tool-registry.js';
 
@@ -40,6 +41,18 @@ interface ZeroGChatCompletionResponse {
   }>;
 }
 
+interface ZeroGComputeBroker {
+  inference: {
+    listService: () => Promise<ZeroGService[]>;
+    getServiceMetadata: (providerAddress: string) => Promise<{ endpoint: string; model: string }>;
+    getRequestHeaders: (providerAddress: string) => Promise<Record<string, string>>;
+  };
+}
+
+interface ZeroGServingBrokerModule {
+  createZGComputeNetworkBroker: (wallet: ethers.Wallet) => Promise<ZeroGComputeBroker>;
+}
+
 type ZeroGService = readonly [
   providerAddress: string,
   serviceType: string,
@@ -74,7 +87,7 @@ export class ToolGenerator {
     try {
       return await this.generateWithZeroG(taskDescription);
     } catch (error) {
-      if (!this.fallbackToOpenAI) {
+      if (!this.fallbackToOpenAI || !process.env.OPENAI_API_KEY) {
         throw error;
       }
 
@@ -88,7 +101,7 @@ export class ToolGenerator {
       throw new Error('ZERO_G_PRIVATE_KEY environment variable not set');
     }
 
-    const { createZGComputeNetworkBroker } = await import('@0glabs/0g-serving-broker');
+    const { createZGComputeNetworkBroker } = this.loadZeroGServingBroker();
     const provider = new ethers.JsonRpcProvider(ZERO_G_RPC_URL);
     const wallet = new ethers.Wallet(privateKey, provider);
     const broker = await createZGComputeNetworkBroker(wallet);
@@ -124,6 +137,11 @@ export class ToolGenerator {
     }
 
     return content;
+  }
+
+  private loadZeroGServingBroker(): ZeroGServingBrokerModule {
+    const require = createRequire(import.meta.url);
+    return require('@0glabs/0g-serving-broker') as ZeroGServingBrokerModule;
   }
 
   private async getChatbotProviderAddress(listService: () => Promise<ZeroGService[]>): Promise<string> {

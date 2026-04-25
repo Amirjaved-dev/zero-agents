@@ -3,10 +3,30 @@
  * Tests uploading and downloading data to/from 0G storage
  */
 
+import { existsSync, readFileSync } from 'node:fs';
 import { uploadToZeroG, downloadFromZeroG } from '../packages/core/dist/storage/zero-g.js';
+
+function loadEnvFile(filePath = '.env'): void {
+  if (!existsSync(filePath)) {
+    return;
+  }
+
+  for (const line of readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
+    const match = line.match(/^\s*([^#][^=]+?)\s*=\s*(.*)\s*$/);
+    if (!match) {
+      continue;
+    }
+
+    const key = match[1].trim();
+    const value = match[2].trim().replace(/^['"]|['"]$/g, '');
+    process.env[key] ??= value;
+  }
+}
 
 async function main() {
   try {
+    loadEnvFile();
+
     console.log('🚀 Starting 0G storage test...\n');
 
     if (!process.env.ZERO_G_PRIVATE_KEY) {

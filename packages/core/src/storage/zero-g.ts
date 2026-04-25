@@ -4,7 +4,7 @@
  */
 
 import { Indexer, MemData } from '@0glabs/0g-ts-sdk';
-import { Wallet } from 'ethers';
+import { JsonRpcProvider, Wallet } from 'ethers';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,7 +24,8 @@ export async function uploadToZeroG(data: object): Promise<string> {
   }
 
   // Create signer from private key
-  const signer = new Wallet(privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`);
+  const provider = new JsonRpcProvider(BLOCKCHAIN_RPC);
+  const signer = new Wallet(privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`, provider);
 
   // Serialize data to JSON and convert to Buffer
   const jsonString = JSON.stringify(data);
