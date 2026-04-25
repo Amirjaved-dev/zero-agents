@@ -3,6 +3,8 @@ import { EvolutionEngine, type EvolutionEvent } from './evolution-engine.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
 import type { AgentIdentityProvider, AgentProfile } from './identity/types.js';
+import { AgentCoordinator } from './communication/agent-coordinator.js';
+import { AXLClient } from './communication/axl-client.js';
 
 export interface SelfEvolvingAgentConfig {
   name: string;
@@ -11,11 +13,13 @@ export interface SelfEvolvingAgentConfig {
   identity?: AgentIdentityProvider;
   zeroGPrivateKey: string;
   openAiKey?: string;
+  axlPort?: number;
 }
 
 export interface AgentConfig {
   name: string;
   description?: string;
+  axlPort?: number;
 }
 
 export interface AgentState {
@@ -53,6 +57,8 @@ export class SelfEvolvingAgent extends EventEmitter {
   private readonly evolutionEngine: EvolutionEngine;
   private readonly state: AgentState;
   private readonly identity?: AgentIdentityProvider;
+  private readonly axlClient: AXLClient;
+  private readonly axlReady: Promise<void>;
 
   constructor(config: SelfEvolvingAgentConfig | AgentConfig) {
     super();
@@ -78,7 +84,9 @@ export class SelfEvolvingAgent extends EventEmitter {
     this.registry = new ToolRegistry();
     this.sandbox = new ToolSandbox();
     this.evolutionEngine = new EvolutionEngine(undefined, this.sandbox, undefined, this.registry);
+    this.axlClient = new AXLClient({ axlPort: config.axlPort });
     this.evolutionEngine.on('step', (event) => this.emitStep(event));
+    this.axlReady = this.initializeAXL();
   }
 
   override on(eventName: 'step', listener: (event: AgentStepEvent) => void): this;
@@ -148,6 +156,45 @@ export class SelfEvolvingAgent extends EventEmitter {
     } catch (error) {
       this.emitStep({ type: 'error', message: this.getErrorMessage(error), data: { error } });
       throw error;
+    }
+  }
+
+  async collaborateWith(otherAgentEnsName: string, task: TaskRequest): Promise<TaskResult> {
+    await this.axlReady;
+
+    if (!this.identity?.getAXLPeerIdForName) {
+      throw new Error('Agent identity provider cannot resolve AXL peer IDs');
+    }
+
+    const peerId = await this.identity.getAXLPeerIdForName(otherAgentEnsName);
+    if (!peerId) {
+      throw new Error(`Could not resolve AXL peer ID for ${otherAgentEnsName}`);
+    }
+
+    return this.axlClient.sendTask(peerId, task);
+  }
+
+  private async initializeAXL(): Promise<void> {
+    try {
+      const peerId = await this.axlClient.getPeerId();
+      this.state.metadata.axlPeerId = peerId;
+
+      if (this.identity?.setAXLPeerId) {
+        try {
+          await this.identity.setAXLPeerId(peerId);
+        } catch (error) {
+          console.warn('Failed to sync axlPeerId to identity provider:', error);
+        }
+      }
+
+      const coordinator = new AgentCoordinator({
+        agent: this,
+        registry: this.registry,
+        axlClient: this.axlClient
+      });
+      await coordinator.start();
+    } catch {
+      return;
     }
   }
 

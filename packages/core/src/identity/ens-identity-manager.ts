@@ -104,6 +104,14 @@ export class ENSIdentityManager implements AgentIdentityProvider {
     return this.getTextRecord('zeroagent.axlPeerId')
   }
 
+  async getAXLPeerIdForName(ensName: string): Promise<string | null> {
+    try {
+      return this.getTextRecordForNode(namehash(normalize(ensName)), 'zeroagent.axlPeerId')
+    } catch {
+      return null
+    }
+  }
+
   async getProfile(): Promise<AgentProfile | null> {
     const [description, capabilities, toolRegistryHash, axlPeerId, url] = await Promise.all([
       this.getTextRecord('description'),
@@ -137,6 +145,17 @@ export class ENSIdentityManager implements AgentIdentityProvider {
       capabilities: profile?.capabilities ?? [],
       toolRegistryHash: rootHash,
       axlPeerId: profile?.axlPeerId,
+      url: profile?.url
+    })
+  }
+
+  async setAXLPeerId(peerId: string): Promise<void> {
+    const profile = await this.getProfile()
+    await this.setAgentProfile({
+      description: profile?.description ?? '',
+      capabilities: profile?.capabilities ?? [],
+      toolRegistryHash: profile?.toolRegistryHash ?? '',
+      axlPeerId: peerId,
       url: profile?.url
     })
   }
@@ -202,6 +221,10 @@ export class ENSIdentityManager implements AgentIdentityProvider {
   }
 
   private async getTextRecord(key: string): Promise<string | null> {
+    return this.getTextRecordForNode(this.node, key)
+  }
+
+  private async getTextRecordForNode(node: `0x${string}`, key: string): Promise<string | null> {
     try {
       const contract = getContract({
         address: PUBLIC_RESOLVER_ADDRESS,
@@ -209,7 +232,7 @@ export class ENSIdentityManager implements AgentIdentityProvider {
         client: this.publicClient
       })
 
-      const value = await contract.read.text([this.node, key])
+      const value = await contract.read.text([node, key])
       return value && value.length > 0 ? value : null
     } catch {
       return null
