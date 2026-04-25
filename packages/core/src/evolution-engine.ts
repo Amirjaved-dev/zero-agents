@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { ToolGenerator } from './generation/tool-generator.js';
 import { ToolEvaluator, type EvalResult } from './sandbox/tool-evaluator.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
@@ -5,20 +6,40 @@ import { ToolRegistry, type Tool } from './storage/tool-registry.js';
 
 const MAX_GENERATION_ATTEMPTS = 3;
 
-export class EvolutionEngine {
+export interface EvolutionEvent {
+  type: 'generating' | 'sandboxing' | 'evaluating' | 'saving';
+  message: string;
+  data?: any;
+}
+
+export class EvolutionEngine extends EventEmitter {
   constructor(
     private readonly generator = new ToolGenerator(),
     private readonly sandbox = new ToolSandbox(),
     private readonly evaluator = new ToolEvaluator(sandbox),
     private readonly registry = new ToolRegistry()
-  ) {}
+  ) {
+    super();
+  }
+
+  override on(eventName: 'step', listener: (event: EvolutionEvent) => void): this;
+  override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    return super.on(eventName, listener);
+  }
+
+  async evolve(taskDescription: string, sampleParams: object = {}): Promise<Tool> {
+    return this.generateTool(taskDescription, sampleParams);
+  }
 
   async generateTool(taskDescription: string, sampleParams: object = {}): Promise<Tool> {
     let feedback: string | undefined;
 
     for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
       const prompt = this.createGenerationPrompt(taskDescription, feedback);
+      this.emitStep({ type: 'generating', message: `Generating tool attempt ${attempt}...`, data: { attempt } });
       const tool = await this.generator.generateTool(prompt);
+
+      this.emitStep({ type: 'sandboxing', message: `Sandboxing generated tool ${tool.name}...`, data: { tool } });
       const sandboxResult = await this.sandbox.run(tool.code, sampleParams);
 
       if (!sandboxResult.success) {
@@ -26,10 +47,12 @@ export class EvolutionEngine {
         continue;
       }
 
+      this.emitStep({ type: 'evaluating', message: `Evaluating generated tool ${tool.name}...`, data: { tool } });
       const evalResult = await this.evaluator.evaluate(tool);
       tool.successRate = evalResult.score;
 
       if (evalResult.passed) {
+        this.emitStep({ type: 'saving', message: `Saving generated tool ${tool.name}...`, data: { tool } });
         await this.registry.saveTool(tool);
         return tool;
       }
@@ -38,6 +61,10 @@ export class EvolutionEngine {
     }
 
     throw new Error(`Tool generation failed after ${MAX_GENERATION_ATTEMPTS} attempts. Last feedback: ${feedback ?? 'none'}`);
+  }
+
+  private emitStep(event: EvolutionEvent): void {
+    this.emit('step', event);
   }
 
   private createGenerationPrompt(taskDescription: string, feedback?: string): string {

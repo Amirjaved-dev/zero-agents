@@ -80,13 +80,11 @@ export class ToolRegistry {
       Array.from(index.values(), async (rootHash) => this.getTool(rootHash))
     );
 
-    return tools.filter((tool) => {
-      const searchableText = [tool.name, tool.description, ...tool.tags]
-        .join(' ')
-        .toLowerCase();
-
-      return searchableText.includes(normalizedQuery);
-    });
+    return tools
+      .map((tool) => ({ tool, score: this.scoreToolMatch(tool, normalizedQuery) }))
+      .filter((result) => result.score > 0)
+      .sort((a, b) => b.score - a.score || b.tool.successRate - a.tool.successRate)
+      .map((result) => result.tool);
   }
 
   async updateIndex(tool: Tool): Promise<void> {
@@ -138,6 +136,30 @@ export class ToolRegistry {
     indexFile._meta = meta;
 
     return indexFile;
+  }
+
+  private scoreToolMatch(tool: Tool, normalizedQuery: string): number {
+    const searchableText = [tool.name, tool.description, ...tool.tags]
+      .join(' ')
+      .toLowerCase();
+
+    if (searchableText.includes(normalizedQuery)) {
+      return 1;
+    }
+
+    const queryTerms = new Set(normalizedQuery.match(/[a-z0-9]+/g) ?? []);
+    if (queryTerms.size === 0) {
+      return 0;
+    }
+
+    let matchedTerms = 0;
+    for (const term of queryTerms) {
+      if (searchableText.includes(term)) {
+        matchedTerms += 1;
+      }
+    }
+
+    return matchedTerms / queryTerms.size;
   }
 
   private async readIndexPointer(): Promise<string | null> {
