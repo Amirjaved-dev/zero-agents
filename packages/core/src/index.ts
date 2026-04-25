@@ -5,6 +5,7 @@
 
 export { ToolRegistry } from './storage/tool-registry.js';
 export { ToolGenerator } from './generation/tool-generator.js';
+export { EvolutionEngine } from './evolution-engine.js';
 export { ToolSandbox } from './sandbox/tool-sandbox.js';
 export { ToolEvaluator } from './sandbox/tool-evaluator.js';
 export type { Tool } from './storage/tool-registry.js';
