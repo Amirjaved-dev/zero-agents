@@ -39,29 +39,27 @@ export class AXLClient {
   }
 
   async getPeerId(): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/info`);
+    const response = await fetch(`${this.baseUrl}/topology`);
     if (!response.ok) {
-      throw new Error(`AXL /info failed with status ${response.status}`);
+      throw new Error(`AXL /topology failed with status ${response.status}`);
     }
 
     const data: unknown = await response.json();
-    if (!this.isRecord(data) || typeof data.peerId !== 'string' || data.peerId.length === 0) {
-      throw new Error('AXL /info response did not include peerId');
+    if (!this.isRecord(data) || typeof data.our_public_key !== 'string' || data.our_public_key.length === 0) {
+      throw new Error('AXL /topology response did not include our_public_key');
     }
 
-    return data.peerId;
+    return data.our_public_key;
   }
 
   async sendMessage(toPeerId: string, message: AgentMessage): Promise<void> {
     const response = await fetch(`${this.baseUrl}/send`, {
       method: 'POST',
       headers: {
-        'content-type': 'application/json'
+        'content-type': 'application/json',
+        'X-Destination-Peer-Id': toPeerId
       },
-      body: JSON.stringify({
-        to: toPeerId,
-        data: JSON.stringify(message)
-      })
+      body: JSON.stringify(message)
     });
 
     if (!response.ok) {
@@ -124,20 +122,21 @@ export class AXLClient {
 
     this.isPolling = true;
     try {
-      const response = await fetch(`${this.baseUrl}/messages`);
+      const response = await fetch(`${this.baseUrl}/recv`);
       if (!response.ok) return;
 
-      const rawMessages: unknown = await response.json();
-      for (const inboxMessage of this.parseInbox(rawMessages)) {
-        const messageKey = this.createMessageKey(inboxMessage);
-        if (this.seenMessageKeys.has(messageKey)) continue;
+      const rawMessage = await response.text();
+      const parsedMessage = this.parseReceivedMessage(rawMessage, response.headers.get('X-From-Peer-Id') ?? '');
+      if (!parsedMessage) return;
 
-        this.rememberMessageKey(messageKey);
-        this.resolvePendingTask(inboxMessage.message);
+      const messageKey = this.createMessageKey(parsedMessage);
+      if (this.seenMessageKeys.has(messageKey)) return;
 
-        for (const listener of this.listeners) {
-          listener(inboxMessage.message, inboxMessage.fromPeerId);
-        }
+      this.rememberMessageKey(messageKey);
+      this.resolvePendingTask(parsedMessage.message);
+
+      for (const listener of this.listeners) {
+        listener(parsedMessage.message, parsedMessage.fromPeerId);
       }
     } catch {
       return;
@@ -157,25 +156,8 @@ export class AXLClient {
     pending.resolve(message.payload as TaskResult);
   }
 
-  private parseInbox(rawMessages: unknown): ParsedInboxMessage[] {
-    const messageList = Array.isArray(rawMessages)
-      ? rawMessages
-      : this.isRecord(rawMessages) && Array.isArray(rawMessages.messages)
-        ? rawMessages.messages
-        : [];
-
-    return messageList.flatMap((rawMessage) => {
-      const parsed = this.parseInboxMessage(rawMessage);
-      return parsed ? [parsed] : [];
-    });
-  }
-
-  private parseInboxMessage(rawMessage: unknown): ParsedInboxMessage | null {
-    if (!this.isRecord(rawMessage)) return null;
-
-    const fromPeerId = this.getPeerIdFromInboxMessage(rawMessage);
-    const rawData = rawMessage.data ?? rawMessage.message;
-    const parsedData = typeof rawData === 'string' ? this.safeJsonParse(rawData) : rawData;
+  private parseReceivedMessage(rawMessage: string, fromPeerId: string): ParsedInboxMessage | null {
+    const parsedData = this.safeJsonParse(rawMessage);
 
     if (!this.isAgentMessage(parsedData)) return null;
 
@@ -183,11 +165,6 @@ export class AXLClient {
       message: parsedData,
       fromPeerId
     };
-  }
-
-  private getPeerIdFromInboxMessage(rawMessage: Record<string, unknown>): string {
-    const from = rawMessage.from ?? rawMessage.fromPeerId ?? rawMessage.peerId;
-    return typeof from === 'string' ? from : '';
   }
 
   private safeJsonParse(value: string): unknown {
