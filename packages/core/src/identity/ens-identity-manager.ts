@@ -51,10 +51,10 @@ export class ENSIdentityManager {
   private readonly node: `0x${string}`
 
   constructor(config: ENSIdentityManagerConfig) {
-    this.ensName = config.ensName
+    this.ensName = config.ensName;
     this.account = privateKeyToAccount(config.privateKey as `0x${string}`)
 
-    const rpcUrl = config.rpcUrl ?? 'https://rpc.sepolia.org'
+    const rpcUrl = config.rpcUrl ?? 'https://sepolia.drpc.org'
 
     this.publicClient = createPublicClient({
       chain: sepolia,
@@ -67,7 +67,11 @@ export class ENSIdentityManager {
       account: this.account
     })
 
-    this.node = namehash(normalize(this.ensName))
+    try {
+      this.node = this.ensName ? namehash(normalize(this.ensName)) : ('0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`)
+    } catch {
+      this.node = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
+    }
   }
 
   async resolveAddress(): Promise<string | null> {
