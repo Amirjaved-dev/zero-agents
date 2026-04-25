@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "test:storage": "tsx scripts/test-storage.ts",
+    "test:agent": "pnpm --filter @zero-agents/core build && tsx scripts/test-agent.ts",
     "build": "pnpm -r build",
     "dev": "pnpm -r dev"
   },

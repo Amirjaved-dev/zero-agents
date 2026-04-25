@@ -14,6 +14,16 @@ export class ToolSandbox {
     const startedAt = Date.now();
 
     try {
+      if (this.usesFetch(toolCode)) {
+        const output = await this.runWithNodeVm(toolCode, params, timeoutMs);
+
+        return {
+          success: true,
+          output,
+          executionTimeMs: Date.now() - startedAt
+        };
+      }
+
       const ivm = await this.loadIsolatedVm();
       const output = await this.runWithIsolatedVm(ivm, toolCode, params, timeoutMs);
 
@@ -70,6 +80,7 @@ export class ToolSandbox {
       String,
       Number,
       Date,
+      fetch,
       params: structuredClone(params)
     });
     const script = new Script(`(async () => { ${this.createSandboxSource(toolCode).split('$0').join('params')} })()`);
@@ -93,7 +104,6 @@ export class ToolSandbox {
       const Number = globalThis.Number;
       const Date = globalThis.Date;
 
-      globalThis.fetch = undefined;
       globalThis.require = undefined;
       globalThis.process = undefined;
       globalThis.Function = undefined;
@@ -103,7 +113,7 @@ export class ToolSandbox {
       const child_process = undefined;
       const net = undefined;
       const http = undefined;
-      const fetch = undefined;
+      const fetch = globalThis.fetch;
       const require = undefined;
       const process = undefined;
       const global = undefined;
@@ -129,6 +139,10 @@ export class ToolSandbox {
       const execute = (${toolCode});
       return execute($0);
     `;
+  }
+
+  private usesFetch(toolCode: string): boolean {
+    return /\bfetch\s*\(/.test(toolCode);
   }
 
   private createFailureResult(error: unknown, startedAt: number): SandboxResult {

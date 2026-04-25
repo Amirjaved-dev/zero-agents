@@ -1,4 +1,3 @@
-import { createZGComputeNetworkBroker } from '@0glabs/0g-serving-broker';
 import { ethers } from 'ethers';
 import { randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
@@ -89,6 +88,7 @@ export class ToolGenerator {
       throw new Error('ZERO_G_PRIVATE_KEY environment variable not set');
     }
 
+    const { createZGComputeNetworkBroker } = await import('@0glabs/0g-serving-broker');
     const provider = new ethers.JsonRpcProvider(ZERO_G_RPC_URL);
     const wallet = new ethers.Wallet(privateKey, provider);
     const broker = await createZGComputeNetworkBroker(wallet);

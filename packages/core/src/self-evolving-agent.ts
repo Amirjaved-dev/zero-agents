@@ -12,6 +12,17 @@ export interface SelfEvolvingAgentConfig {
   openAiKey?: string;
 }
 
+export interface AgentConfig {
+  name: string;
+  description?: string;
+}
+
+export interface AgentState {
+  iteration: number;
+  lastUpdate: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface TaskRequest {
   description: string;
   params?: object;
@@ -40,17 +51,26 @@ export class SelfEvolvingAgent extends EventEmitter {
   private readonly registry: ToolRegistry;
   private readonly sandbox: ToolSandbox;
   private readonly evolutionEngine: EvolutionEngine;
+  private readonly state: AgentState;
 
-  constructor(config: SelfEvolvingAgentConfig) {
+  constructor(config: SelfEvolvingAgentConfig | AgentConfig) {
     super();
 
     this.name = config.name;
-    this.ensName = config.ensName;
+    this.ensName = 'ensName' in config ? config.ensName : undefined;
     this.description = config.description ?? '';
-    this.capabilities = config.capabilities ?? [];
+    this.capabilities = 'capabilities' in config ? config.capabilities ?? [] : [];
+    this.state = {
+      iteration: 0,
+      lastUpdate: Date.now(),
+      metadata: {}
+    };
 
-    process.env.ZERO_G_PRIVATE_KEY = config.zeroGPrivateKey;
-    if (config.openAiKey) {
+    if ('zeroGPrivateKey' in config) {
+      process.env.ZERO_G_PRIVATE_KEY = config.zeroGPrivateKey;
+    }
+
+    if ('openAiKey' in config && config.openAiKey) {
       process.env.OPENAI_API_KEY = config.openAiKey;
     }
 
@@ -63,6 +83,23 @@ export class SelfEvolvingAgent extends EventEmitter {
   override on(eventName: 'step', listener: (event: AgentStepEvent) => void): this;
   override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
     return super.on(eventName, listener);
+  }
+
+  getName(): string {
+    return this.name;
+  }
+
+  getDescription(): string {
+    return this.description;
+  }
+
+  getState(): AgentState {
+    return this.state;
+  }
+
+  async evolve(): Promise<void> {
+    this.state.iteration += 1;
+    this.state.lastUpdate = Date.now();
   }
 
   async handleTask(task: TaskRequest): Promise<TaskResult> {
