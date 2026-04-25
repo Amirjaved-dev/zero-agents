@@ -3,11 +3,17 @@
  * Tests uploading and downloading data to/from 0G storage
  */
 
-import { uploadToZeroG, downloadFromZeroG } from '@zero-agents/core/dist/storage/zero-g.js';
+import { uploadToZeroG, downloadFromZeroG } from '../packages/core/dist/storage/zero-g.js';
 
 async function main() {
   try {
     console.log('🚀 Starting 0G storage test...\n');
+
+    if (!process.env.ZERO_G_PRIVATE_KEY) {
+      console.log('⏭️  Skipping 0G storage test: ZERO_G_PRIVATE_KEY environment variable not set');
+      console.log('Set ZERO_G_PRIVATE_KEY to run the live upload/download integration test.');
+      return;
+    }
 
     // Prepare test data
     const testData = {

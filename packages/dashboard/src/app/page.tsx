@@ -1,5 +1,3 @@
-import { SelfEvolvingAgent } from '@zero-agents/core';
-
 export default function Home() {
   return (
     <main style={{ padding: '2rem' }}>

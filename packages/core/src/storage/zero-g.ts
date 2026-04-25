@@ -3,10 +3,13 @@
  * Handles upload and download of agent state from 0G distributed storage
  */
 
-import { ZgFile, Indexer, MemData } from '@0glabs/0g-ts-sdk';
+import { Indexer, MemData } from '@0glabs/0g-ts-sdk';
 import { Wallet } from 'ethers';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-const EVM_RPC = 'https://evmrpc-testnet.0g.ai';
+const BLOCKCHAIN_RPC = 'https://evmrpc-testnet.0g.ai';
 const IND_RPC = 'https://indexer-storage-testnet-turbo.0g.ai';
 
 /**
@@ -21,21 +24,26 @@ export async function uploadToZeroG(data: object): Promise<string> {
   }
 
   // Create signer from private key
-  const signer = new Wallet(privateKey);
+  const signer = new Wallet(privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`);
 
   // Serialize data to JSON and convert to Buffer
   const jsonString = JSON.stringify(data);
   const dataBuffer = Buffer.from(jsonString, 'utf-8');
 
-  // Create MemData from buffer
+  // Create in-memory file from buffer
   const memData = new MemData(dataBuffer);
-
-  // Create ZgFile with the data
-  const zgFile = new ZgFile([memData]);
 
   // Upload to 0G via Indexer
   const indexer = new Indexer(IND_RPC);
-  const rootHash = await indexer.upload(zgFile, signer);
+  const [rootHash, error] = await indexer.upload(memData, BLOCKCHAIN_RPC, signer);
+
+  if (error) {
+    throw error;
+  }
+
+  if (!rootHash) {
+    throw new Error('0G upload did not return a root hash');
+  }
 
   return rootHash;
 }
@@ -46,18 +54,27 @@ export async function uploadToZeroG(data: object): Promise<string> {
  * @returns Downloaded object
  */
 export async function downloadFromZeroG(rootHash: string): Promise<object> {
-  // Query the indexer to retrieve the data
   const indexer = new Indexer(IND_RPC);
-  const zgFile = await indexer.download(rootHash);
+  const tempDir = await mkdtemp(join(tmpdir(), 'zero-agent-'));
+  const filePath = join(tempDir, 'download.json');
 
-  // Extract the data from ZgFile
-  const dataBuffer = zgFile.getSegment(0);
+  try {
+    const error = await indexer.download(rootHash, filePath, false);
+    if (error) {
+      throw error;
+    }
 
-  // Parse JSON from buffer
-  const jsonString = dataBuffer.toString('utf-8');
-  const data = JSON.parse(jsonString);
+    const jsonString = await readFile(filePath, 'utf-8');
+    const data: unknown = JSON.parse(jsonString);
 
-  return data;
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('Downloaded 0G data is not a JSON object');
+    }
+
+    return data;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 export default {
