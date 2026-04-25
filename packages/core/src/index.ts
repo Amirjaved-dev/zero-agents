@@ -5,7 +5,9 @@
 
 export { ToolRegistry } from './storage/tool-registry.js';
 export { ToolGenerator } from './generation/tool-generator.js';
+export { ToolSandbox } from './sandbox/tool-sandbox.js';
 export type { Tool } from './storage/tool-registry.js';
+export type { SandboxResult } from './sandbox/tool-sandbox.js';
 
 export interface AgentConfig {
   name: string;
