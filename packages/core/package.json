@@ -1,0 +1,29 @@
+{
+  "name": "@zero-agents/core",
+  "version": "0.0.1",
+  "description": "ZeroAgent framework core",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@0glabs/0g-ts-sdk": "^0.2.0",
+    "@0glabs/0g-serving-broker": "^0.1.0",
+    "ethers": "^6.10.0",
+    "openai": "^4.26.0",
+    "viem": "^2.8.0",
+    "ivm": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}
