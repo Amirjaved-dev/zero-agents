@@ -4,6 +4,7 @@
  */
 
 export { ToolRegistry } from './storage/tool-registry.js';
+export { ToolGenerator } from './generation/tool-generator.js';
 export type { Tool } from './storage/tool-registry.js';
 
 export interface AgentConfig {
