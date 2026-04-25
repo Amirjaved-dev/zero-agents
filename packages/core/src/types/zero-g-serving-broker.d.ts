@@ -1,8 +1,22 @@
 declare module '@0glabs/0g-serving-broker' {
   import type { Wallet } from 'ethers';
 
+  type ZGComputeService = readonly [
+    providerAddress: string,
+    serviceType: string,
+    endpoint: string,
+    inputPrice: string,
+    outputPrice: string,
+    updatedAt: string,
+    model: string,
+    verifiability: string,
+    metadata: string,
+    signerAddress: string,
+    isAvailable: boolean
+  ];
+
   interface ZGComputeInferenceBroker {
-    acknowledgeProviderSigner(providerAddress: string): Promise<void>;
+    listService(): Promise<ZGComputeService[]>;
     getServiceMetadata(providerAddress: string): Promise<{
       endpoint: string;
       model: string;

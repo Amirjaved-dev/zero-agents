@@ -5,7 +5,6 @@ import OpenAI from 'openai';
 import type { Tool } from '../storage/tool-registry.js';
 
 const ZERO_G_RPC_URL = 'https://evmrpc-testnet.0g.ai';
-const ZERO_G_PROVIDER_ADDRESS = '0x69Eb5a0BD7d0f4bF39eD5CE9Bd3376c61863aE08';
 const OPENAI_FALLBACK_MODEL = 'gpt-4o-mini';
 
 const TOOL_GENERATION_SYSTEM_PROMPT = `You generate JavaScript tools for an autonomous agent.
@@ -41,6 +40,20 @@ interface ZeroGChatCompletionResponse {
     };
   }>;
 }
+
+type ZeroGService = readonly [
+  providerAddress: string,
+  serviceType: string,
+  endpoint: string,
+  inputPrice: string,
+  outputPrice: string,
+  updatedAt: string,
+  model: string,
+  verifiability: string,
+  metadata: string,
+  signerAddress: string,
+  isAvailable: boolean
+];
 
 export class ToolGenerator {
   constructor(public readonly fallbackToOpenAI = true) {}
@@ -79,11 +92,10 @@ export class ToolGenerator {
     const provider = new ethers.JsonRpcProvider(ZERO_G_RPC_URL);
     const wallet = new ethers.Wallet(privateKey, provider);
     const broker = await createZGComputeNetworkBroker(wallet);
+    const providerAddress = await this.getChatbotProviderAddress(broker.inference.listService.bind(broker.inference));
 
-    await broker.inference.acknowledgeProviderSigner(ZERO_G_PROVIDER_ADDRESS);
-
-    const { endpoint, model } = await broker.inference.getServiceMetadata(ZERO_G_PROVIDER_ADDRESS);
-    const headers = await broker.inference.getRequestHeaders(ZERO_G_PROVIDER_ADDRESS);
+    const { endpoint, model } = await broker.inference.getServiceMetadata(providerAddress);
+    const headers = await broker.inference.getRequestHeaders(providerAddress);
     const response = await fetch(`${endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -112,6 +124,17 @@ export class ToolGenerator {
     }
 
     return content;
+  }
+
+  private async getChatbotProviderAddress(listService: () => Promise<ZeroGService[]>): Promise<string> {
+    const services = await listService();
+    const chatbot = services.find((service) => service[1] === 'chatbot' && service[10]);
+
+    if (!chatbot) {
+      throw new Error('0G Compute did not return an available chatbot provider');
+    }
+
+    return chatbot[0];
   }
 
   private async generateWithOpenAI(taskDescription: string): Promise<string> {
