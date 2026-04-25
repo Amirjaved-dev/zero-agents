@@ -1,0 +1,16 @@
+{
+  "name": "zero-agents",
+  "version": "0.0.1",
+  "description": "ZeroAgent framework - Self-evolving agents with 0G storage",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:storage": "tsx scripts/test-storage.ts",
+    "build": "pnpm -r build",
+    "dev": "pnpm -r dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.0"
+  }
+}
