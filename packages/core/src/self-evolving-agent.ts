@@ -2,10 +2,13 @@ import { EventEmitter } from 'node:events';
 import { EvolutionEngine, type EvolutionEvent } from './evolution-engine.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
+import { ENSIdentityManager } from './identity/ens-identity-manager.js';
+import type { AgentProfile } from './identity/types.js';
 
 export interface SelfEvolvingAgentConfig {
   name: string;
   ensName?: string;
+  ensPrivateKey?: string;
   description?: string;
   capabilities?: string[];
   zeroGPrivateKey: string;
@@ -52,6 +55,7 @@ export class SelfEvolvingAgent extends EventEmitter {
   private readonly sandbox: ToolSandbox;
   private readonly evolutionEngine: EvolutionEngine;
   private readonly state: AgentState;
+  private readonly identityManager?: ENSIdentityManager;
 
   constructor(config: SelfEvolvingAgentConfig | AgentConfig) {
     super();
@@ -78,6 +82,14 @@ export class SelfEvolvingAgent extends EventEmitter {
     this.sandbox = new ToolSandbox();
     this.evolutionEngine = new EvolutionEngine(undefined, this.sandbox, undefined, this.registry);
     this.evolutionEngine.on('step', (event) => this.emitStep(event));
+
+    if (config.ensName && config.ensPrivateKey) {
+      this.identityManager = new ENSIdentityManager({
+        ensName: config.ensName,
+        privateKey: config.ensPrivateKey
+      });
+      this.initializeAgentProfile();
+    }
   }
 
   override on(eventName: 'step', listener: (event: AgentStepEvent) => void): this;
@@ -152,6 +164,23 @@ export class SelfEvolvingAgent extends EventEmitter {
     return [...tools].sort((a, b) => b.successRate - a.successRate || b.usageCount - a.usageCount)[0] ?? null;
   }
 
+  private async initializeAgentProfile(): Promise<void> {
+    if (!this.identityManager || !this.ensName) return;
+
+    const profile: AgentProfile = {
+      description: this.description,
+      capabilities: this.capabilities,
+      toolRegistryHash: ''
+    };
+
+    try {
+      await this.identityManager.setAgentProfile(profile);
+      console.log(`ENS profile initialized for ${this.ensName}`);
+    } catch (error) {
+      console.warn('Failed to initialize ENS profile:', error);
+    }
+  }
+
   private async recordToolResult(tool: Tool, succeeded: boolean): Promise<void> {
     const nextUsageCount = tool.usageCount + 1;
     const nextSuccesses = tool.successRate * tool.usageCount + (succeeded ? 1 : 0);
@@ -160,6 +189,18 @@ export class SelfEvolvingAgent extends EventEmitter {
     tool.successRate = nextSuccesses / nextUsageCount;
 
     await this.registry.saveTool(tool);
+
+    if (this.identityManager && tool.rootHash) {
+      try {
+        await this.identityManager.setAgentProfile({
+          description: this.description,
+          capabilities: this.capabilities,
+          toolRegistryHash: tool.rootHash
+        });
+      } catch (error) {
+        console.warn('Failed to sync toolRegistryHash to ENS:', error);
+      }
+    }
   }
 
   private emitStep(event: AgentStepEvent | EvolutionEvent): void {
