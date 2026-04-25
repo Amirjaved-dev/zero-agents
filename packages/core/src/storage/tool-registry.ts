@@ -91,6 +91,20 @@ export class ToolRegistry {
       .map((result) => result.tool);
   }
 
+  async exportTools(): Promise<Tool[]> {
+    const index = await this.loadIndex();
+    return Promise.all(Array.from(index.values(), async (rootHash) => this.getTool(rootHash)));
+  }
+
+  async importTool(tool: Tool): Promise<string> {
+    if (tool.rootHash) {
+      await this.updateIndex(tool);
+      return tool.rootHash;
+    }
+
+    return this.saveTool(tool);
+  }
+
   async updateIndex(tool: Tool): Promise<string> {
     if (!tool.rootHash) {
       throw new Error('Cannot update tool index without a rootHash');
