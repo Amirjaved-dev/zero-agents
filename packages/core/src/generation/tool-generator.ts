@@ -71,22 +71,27 @@ export interface ToolGeneratorOptions {
   fallbackToOpenAI?: boolean;
   zeroGPrivateKey?: string;
   openAiKey?: string;
+  /** Override the 0G EVM RPC endpoint used by the compute broker. Defaults to the public 0G testnet. */
+  zeroGBlockchainRpc?: string;
 }
 
 export class ToolGenerator {
   readonly fallbackToOpenAI: boolean;
   private readonly zeroGPrivateKey?: string;
   private readonly openAiKey?: string;
+  private readonly zeroGBlockchainRpc: string;
 
   constructor(options: ToolGeneratorOptions | boolean = {}) {
     if (typeof options === 'boolean') {
       this.fallbackToOpenAI = options;
+      this.zeroGBlockchainRpc = ZERO_G_RPC_URL;
       return;
     }
 
     this.fallbackToOpenAI = options.fallbackToOpenAI ?? true;
     this.zeroGPrivateKey = options.zeroGPrivateKey;
     this.openAiKey = options.openAiKey;
+    this.zeroGBlockchainRpc = options.zeroGBlockchainRpc ?? ZERO_G_RPC_URL;
   }
 
   async generateTool(taskDescription: string): Promise<Tool> {
@@ -121,7 +126,7 @@ export class ToolGenerator {
     }
 
     const { createZGComputeNetworkBroker } = this.loadZeroGServingBroker();
-    const provider = new ethers.JsonRpcProvider(ZERO_G_RPC_URL);
+    const provider = new ethers.JsonRpcProvider(this.zeroGBlockchainRpc);
     const wallet = new ethers.Wallet(privateKey, provider);
     const broker = await createZGComputeNetworkBroker(wallet);
     const providerAddress = await this.getChatbotProviderAddress(broker.inference.listService.bind(broker.inference));
