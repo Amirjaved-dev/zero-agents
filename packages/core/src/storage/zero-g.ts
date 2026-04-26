@@ -20,6 +20,25 @@ export interface ZeroGStorageOptions {
 }
 
 /**
+ * Retry helper with exponential backoff.
+ * Attempts: 1 → 2 → 3 with delays 500ms → 1000ms between retries.
+ */
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 500): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        await new Promise((res) => setTimeout(res, baseDelayMs * 2 ** (attempt - 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
  * Upload data to 0G storage
  * @param data - Object to store
  * @returns Root hash of the uploaded data
@@ -30,32 +49,29 @@ export async function uploadToZeroG(data: object, options: ZeroGStorageOptions =
     throw new Error('ZERO_G_PRIVATE_KEY environment variable not set');
   }
 
-  // Create signer from private key
   const provider = new JsonRpcProvider(BLOCKCHAIN_RPC);
   const signer = new Wallet(privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`, provider);
 
-  // Serialize data to JSON and convert to Buffer
   const jsonString = JSON.stringify(data);
   const dataBuffer = Buffer.from(jsonString, 'utf-8');
-
-  // Create in-memory file from buffer
   const memData = new MemData(dataBuffer);
-
-  // Upload to 0G via Indexer
   const indexer = new Indexer(IND_RPC);
-  const [uploadResponse, error] = await indexer.upload(memData, BLOCKCHAIN_RPC, signer as unknown as IndexerUploadSigner);
 
-  if (error) {
-    throw error;
-  }
+  return withRetry(async () => {
+    const [uploadResponse, error] = await indexer.upload(memData, BLOCKCHAIN_RPC, signer as unknown as IndexerUploadSigner);
 
-  const rootHash = rootHashFromUploadResponse(uploadResponse);
+    if (error) {
+      throw error;
+    }
 
-  if (!rootHash) {
-    throw new Error('0G upload did not return a root hash');
-  }
+    const rootHash = rootHashFromUploadResponse(uploadResponse);
 
-  return rootHash;
+    if (!rootHash) {
+      throw new Error('0G upload did not return a root hash');
+    }
+
+    return rootHash;
+  });
 }
 
 function rootHashFromUploadResponse(uploadResponse: UploadResponse): string {
@@ -81,19 +97,23 @@ export async function downloadFromZeroG(rootHash: string): Promise<object> {
   const filePath = join(tempDir, 'download.json');
 
   try {
-    const error = await indexer.download(rootHash, filePath, false);
-    if (error) {
-      throw error;
-    }
+    const result = await withRetry(async () => {
+      const error = await indexer.download(rootHash, filePath, false);
+      if (error) {
+        throw error;
+      }
 
-    const jsonString = await readFile(filePath, 'utf-8');
-    const data: unknown = JSON.parse(jsonString);
+      const jsonString = await readFile(filePath, 'utf-8');
+      const data: unknown = JSON.parse(jsonString);
 
-    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-      throw new Error('Downloaded 0G data is not a JSON object');
-    }
+      if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+        throw new Error('Downloaded 0G data is not a JSON object');
+      }
 
-    return data;
+      return data;
+    });
+
+    return result;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
