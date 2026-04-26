@@ -48,7 +48,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "prepack": "pnpm build"
+    "prepack": "pnpm build",
+    "test:unit": "tsx src/__tests__/sandbox.test.ts && tsx src/__tests__/errors.test.ts && tsx src/__tests__/coordinator-safety.test.ts"
   },
   "dependencies": {
     "@0gfoundation/0g-ts-sdk": "^1.2.6",
@@ -59,6 +60,7 @@
     "viem": "^2.8.0"
   },
   "devDependencies": {
+    "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   },
   "author": "ZeroAgent contributors"
