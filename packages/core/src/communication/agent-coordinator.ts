@@ -97,7 +97,32 @@ export class AgentCoordinator {
 
   private async handleToolShare(message: AgentMessage): Promise<void> {
     if (!this.isTool(message.payload)) return;
-    await this.registry.importTool(message.payload);
+
+    const tool = message.payload;
+    if (!this.isToolCodeSafe(tool.code)) {
+      console.warn(`Rejected AXL tool import "${tool.name}": unsafe code patterns detected`);
+      return;
+    }
+
+    await this.registry.importTool(tool);
+  }
+
+  /**
+   * Blocks tool code that contains patterns which could escape the sandbox.
+   * This is a defence-in-depth check — the sandbox itself also blocks these,
+   * but rejecting at import time avoids storing malicious code in the registry.
+   */
+  private isToolCodeSafe(code: string): boolean {
+    const dangerous = [
+      /\brequire\s*\(/,
+      /\bprocess\s*\./,
+      /child_process/,
+      /\beval\s*\(/,
+      /new\s+Function\s*\(/,
+      /\bimport\s*\(/,
+      /globalThis\s*\.\s*(require|process)/
+    ];
+    return !dangerous.some((pattern) => pattern.test(code));
   }
 
   private isTaskRequest(value: unknown): value is TaskRequest {
