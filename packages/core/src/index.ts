@@ -12,7 +12,7 @@ export { SelfEvolvingAgent } from './self-evolving-agent.js';
 export { ENSIdentityManager } from './identity/ens-identity-manager.js';
 export { AXLClient } from './communication/axl-client.js';
 export { AgentCoordinator } from './communication/agent-coordinator.js';
-export type { Tool } from './storage/tool-registry.js';
+export type { Tool, ToolHistory } from './storage/tool-registry.js';
 export type { ToolRegistryOptions } from './storage/tool-registry.js';
 export type { ZeroGStorageOptions } from './storage/zero-g.js';
 export type { ToolGeneratorOptions } from './generation/tool-generator.js';
