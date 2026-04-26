@@ -181,9 +181,9 @@ export class ENSIdentityManager implements AgentIdentityProvider {
       records.push({ key: 'url', value: profile.url })
     }
 
-    for (const record of records) {
-      await resolver.write.setText([this.node, record.key, record.value])
-    }
+    await Promise.all(
+      records.map((record) => resolver.write.setText([this.node, record.key, record.value]))
+    )
   }
 
   async discoverAgentsByCapability(
@@ -195,14 +195,10 @@ export class ENSIdentityManager implements AgentIdentityProvider {
     for (const name of knownAgentNames) {
       try {
         const node = namehash(normalize(name))
-        const client = createPublicClient({
-          chain: sepolia,
-          transport: http()
-        })
         const contract = getContract({
           address: PUBLIC_RESOLVER_ADDRESS,
           abi: RESOLVER_ABI,
-          client
+          client: this.publicClient
         })
 
         const raw = await contract.read.text([node, 'capabilities'])
