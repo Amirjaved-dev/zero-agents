@@ -1,8 +1,10 @@
 import OpenAI from 'openai';
 import type { Tool } from '../storage/tool-registry.js';
 import { ToolSandbox, type SandboxResult } from './tool-sandbox.js';
+import { EvaluationError } from '../errors.js';
 
 const TEST_CASE_MODEL = 'gpt-4o-mini';
+const DEFAULT_TEST_CASE_TIMEOUT_MS = 30_000;
 
 export interface TestCase {
   input: object;
@@ -28,10 +30,15 @@ interface TestCasePayload {
 }
 
 export class ToolEvaluator {
+  private readonly testCaseTimeoutMs: number;
+
   constructor(
     private readonly sandbox = new ToolSandbox(),
-    private readonly openAiKey?: string
-  ) {}
+    private readonly openAiKey?: string,
+    testCaseTimeoutMs = DEFAULT_TEST_CASE_TIMEOUT_MS
+  ) {
+    this.testCaseTimeoutMs = testCaseTimeoutMs;
+  }
 
   async evaluate(tool: Tool, testCases?: TestCase[]): Promise<EvalResult> {
     const cases = testCases ?? (await this.generateTestCases(tool));
@@ -67,26 +74,37 @@ export class ToolEvaluator {
     }
 
     const client = new OpenAI({ apiKey });
-    const completion = await client.chat.completions.create({
-      model: TEST_CASE_MODEL,
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Generate exactly two basic test cases for a JavaScript tool. Return only JSON: {"testCases":[{"input":{},"description":"..."}]}. Omit "expectedOutput" unless you know the exact value — omitting it means any successful execution passes.'
-        },
-        {
-          role: 'user',
-          content: `Tool name: ${tool.name}\nDescription: ${tool.description}\nInput schema: ${JSON.stringify(tool.schema.input)}\nOutput schema: ${JSON.stringify(tool.schema.output)}`
-        }
-      ]
-    });
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new EvaluationError(`Test case generation timed out after ${this.testCaseTimeoutMs}ms`)),
+        this.testCaseTimeoutMs
+      )
+    );
+
+    const completion = await Promise.race([
+      client.chat.completions.create({
+        model: TEST_CASE_MODEL,
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Generate exactly two basic test cases for a JavaScript tool. Return only JSON: {"testCases":[{"input":{},"description":"..."}]}. Omit "expectedOutput" unless you know the exact value — omitting it means any successful execution passes.'
+          },
+          {
+            role: 'user',
+            content: `Tool name: ${tool.name}\nDescription: ${tool.description}\nInput schema: ${JSON.stringify(tool.schema.input)}\nOutput schema: ${JSON.stringify(tool.schema.output)}`
+          }
+        ]
+      }),
+      timeoutPromise
+    ]);
 
     const content = completion.choices[0]?.message.content;
     if (!content) {
-      throw new Error('LLM returned an empty test case response');
+      throw new EvaluationError('LLM returned an empty test case response');
     }
 
     return this.parseTestCases(content);
@@ -98,11 +116,11 @@ export class ToolEvaluator {
     try {
       parsed = JSON.parse(responseText);
     } catch (error) {
-      throw new Error(`Test case response was not valid JSON: ${this.getErrorMessage(error)}`);
+      throw new EvaluationError(`Test case response was not valid JSON: ${this.getErrorMessage(error)}`);
     }
 
     if (!this.isTestCasePayload(parsed)) {
-      throw new Error('Test case response does not match the expected schema');
+      throw new EvaluationError('Test case response does not match the expected schema');
     }
 
     return parsed.testCases;
