@@ -67,6 +67,9 @@ export class SelfEvolvingAgent extends EventEmitter {
   private readonly axlReady: Promise<void>;
   private readonly axlEnabled: boolean;
   private coordinator?: AgentCoordinator;
+  // Serialises concurrent tool-stat writes so two parallel tasks can't both
+  // read usageCount=N, both write N+1, and lose one increment.
+  private toolWriteLock = Promise.resolve();
 
   constructor(config: SelfEvolvingAgentConfig | AgentConfig) {
     super();
@@ -243,23 +246,34 @@ export class SelfEvolvingAgent extends EventEmitter {
   }
 
   private async recordToolResult(tool: Tool, succeeded: boolean): Promise<void> {
-    const nextUsageCount = tool.usageCount + 1;
-    const nextSuccesses = tool.successRate * tool.usageCount + (succeeded ? 1 : 0);
+    // Acquire a per-agent write lock so concurrent task executions can't both
+    // read the same usageCount, both increment to the same value, and lose one write.
+    const prev = this.toolWriteLock;
+    let release!: () => void;
+    this.toolWriteLock = new Promise<void>((res) => { release = res; });
 
-    tool.usageCount = nextUsageCount;
-    tool.successRate = nextSuccesses / nextUsageCount;
+    await prev;
+    try {
+      const nextUsageCount = tool.usageCount + 1;
+      const nextSuccesses = tool.successRate * tool.usageCount + (succeeded ? 1 : 0);
 
-    await this.registry.saveTool(tool);
+      tool.usageCount = nextUsageCount;
+      tool.successRate = nextSuccesses / nextUsageCount;
 
-    if (this.identity) {
-      try {
-        const indexRootHash = await this.registry.getIndexRootHash();
-        if (indexRootHash) {
-          await this.identity.setToolRegistryHash(indexRootHash);
+      await this.registry.saveTool(tool);
+
+      if (this.identity) {
+        try {
+          const indexRootHash = await this.registry.getIndexRootHash();
+          if (indexRootHash) {
+            await this.identity.setToolRegistryHash(indexRootHash);
+          }
+        } catch (error) {
+          console.warn('Failed to sync toolRegistryHash to identity provider:', error);
         }
-      } catch (error) {
-        console.warn('Failed to sync toolRegistryHash to identity provider:', error);
       }
+    } finally {
+      release();
     }
   }
 
