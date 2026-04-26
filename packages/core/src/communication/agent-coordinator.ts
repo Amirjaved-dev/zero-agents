@@ -111,16 +111,36 @@ export class AgentCoordinator {
    * Blocks tool code that contains patterns which could escape the sandbox.
    * This is a defence-in-depth check — the sandbox itself also blocks these,
    * but rejecting at import time avoids storing malicious code in the registry.
+   *
+   * Patterns covered:
+   * - `require(...)` / `require.resolve(...)`
+   * - `process.*`
+   * - `child_process`
+   * - `eval(...)` (direct and indirect via `(0, eval)(...)`)
+   * - `new Function(...)`
+   * - `import(...)`
+   * - `globalThis.require/process/eval/Function`
+   * - `__proto__` prototype chain manipulation
+   * - `Object.defineProperty` / `Object.setPrototypeOf`
+   * - `Proxy(...)` constructor
+   * - `Reflect.*`
    */
   private isToolCodeSafe(code: string): boolean {
     const dangerous = [
       /\brequire\s*\(/,
+      /\brequire\s*\.\s*resolve\s*\(/,
       /\bprocess\s*\./,
       /child_process/,
       /\beval\s*\(/,
+      // Indirect eval: (0, eval)(...) or window.eval(...)
+      /[^a-zA-Z_$]eval\s*\(/,
       /new\s+Function\s*\(/,
       /\bimport\s*\(/,
-      /globalThis\s*\.\s*(require|process)/
+      /globalThis\s*\.\s*(require|process|eval|Function)/,
+      /__proto__/,
+      /Object\s*\.\s*(?:defineProperty|setPrototypeOf|getOwnPropertyDescriptor)\s*\(/,
+      /\bProxy\s*\(/,
+      /\bReflect\s*\./
     ];
     return !dangerous.some((pattern) => pattern.test(code));
   }
