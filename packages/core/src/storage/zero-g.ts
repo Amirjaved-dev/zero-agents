@@ -8,15 +8,21 @@ import { JsonRpcProvider, Wallet } from 'ethers';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { StorageError } from '../errors.js';
 
-const BLOCKCHAIN_RPC = 'https://evmrpc-testnet.0g.ai';
-const IND_RPC = 'https://indexer-storage-testnet-turbo.0g.ai';
+const DEFAULT_BLOCKCHAIN_RPC = 'https://evmrpc-testnet.0g.ai';
+const DEFAULT_IND_RPC = 'https://indexer-storage-testnet-turbo.0g.ai';
+
 
 type IndexerUploadSigner = Parameters<Indexer['upload']>[2];
 type UploadResponse = string | { rootHash: string; txHash?: string } | { rootHashes: string[]; txHashes?: string[] };
 
 export interface ZeroGStorageOptions {
   privateKey?: string;
+  /** Override the 0G EVM RPC endpoint. Defaults to the public 0G testnet. */
+  blockchainRpc?: string;
+  /** Override the 0G Storage indexer endpoint. Defaults to the public 0G testnet indexer. */
+  indexerRpc?: string;
 }
 
 /**
@@ -46,28 +52,31 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs =
 export async function uploadToZeroG(data: object, options: ZeroGStorageOptions = {}): Promise<string> {
   const privateKey = options.privateKey ?? process.env.ZERO_G_PRIVATE_KEY;
   if (!privateKey) {
-    throw new Error('ZERO_G_PRIVATE_KEY environment variable not set');
+    throw new StorageError('ZERO_G_PRIVATE_KEY environment variable not set');
   }
 
-  const provider = new JsonRpcProvider(BLOCKCHAIN_RPC);
+  const blockchainRpc = options.blockchainRpc ?? DEFAULT_BLOCKCHAIN_RPC;
+  const indexerRpc = options.indexerRpc ?? DEFAULT_IND_RPC;
+
+  const provider = new JsonRpcProvider(blockchainRpc);
   const signer = new Wallet(privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`, provider);
 
   const jsonString = JSON.stringify(data);
   const dataBuffer = Buffer.from(jsonString, 'utf-8');
   const memData = new MemData(dataBuffer);
-  const indexer = new Indexer(IND_RPC);
+  const indexer = new Indexer(indexerRpc);
 
   return withRetry(async () => {
-    const [uploadResponse, error] = await indexer.upload(memData, BLOCKCHAIN_RPC, signer as unknown as IndexerUploadSigner);
+    const [uploadResponse, error] = await indexer.upload(memData, blockchainRpc, signer as unknown as IndexerUploadSigner);
 
     if (error) {
-      throw error;
+      throw new StorageError(`0G upload failed: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const rootHash = rootHashFromUploadResponse(uploadResponse);
 
     if (!rootHash) {
-      throw new Error('0G upload did not return a root hash');
+      throw new StorageError('0G upload did not return a root hash');
     }
 
     return rootHash;
@@ -87,12 +96,17 @@ function rootHashFromUploadResponse(uploadResponse: UploadResponse): string {
 }
 
 /**
- * Download data from 0G storage
+ * Download data from 0G storage.
  * @param rootHash - Root hash of the data to retrieve
+ * @param options  - Optional overrides (e.g. `indexerRpc` for a custom indexer)
  * @returns Downloaded object
  */
-export async function downloadFromZeroG(rootHash: string): Promise<object> {
-  const indexer = new Indexer(IND_RPC);
+export async function downloadFromZeroG(
+  rootHash: string,
+  options: Pick<ZeroGStorageOptions, 'indexerRpc'> = {}
+): Promise<object> {
+  const indexerRpc = options.indexerRpc ?? DEFAULT_IND_RPC;
+  const indexer = new Indexer(indexerRpc);
   const tempDir = await mkdtemp(join(tmpdir(), 'zero-agent-'));
   const filePath = join(tempDir, 'download.json');
 
@@ -100,14 +114,14 @@ export async function downloadFromZeroG(rootHash: string): Promise<object> {
     const result = await withRetry(async () => {
       const error = await indexer.download(rootHash, filePath, false);
       if (error) {
-        throw error;
+        throw new StorageError(`0G download failed: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       const jsonString = await readFile(filePath, 'utf-8');
       const data: unknown = JSON.parse(jsonString);
 
       if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-        throw new Error('Downloaded 0G data is not a JSON object');
+        throw new StorageError('Downloaded 0G data is not a JSON object');
       }
 
       return data;
