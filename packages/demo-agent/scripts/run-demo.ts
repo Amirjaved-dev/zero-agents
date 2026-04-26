@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ResearchAgent from '../src/index.js';
+import { ENSIdentityManager } from '@zero-agents/core';
 import type { AgentIdentityProvider, AgentProfile, AgentStepEvent, TaskResult } from '@zero-agents/core';
 
 const TASK_DESCRIPTION = 'Search for the top 3 trending AI agents news today and summarize them';
@@ -60,6 +61,32 @@ class DemoIdentityProvider implements AgentIdentityProvider {
   }
 }
 
+function createIdentity(ensName: string): AgentIdentityProvider {
+  const privateKey = process.env.ENS_PRIVATE_KEY;
+  const configuredName = process.env.ENS_NAME ?? ensName;
+  if (privateKey && configuredName === ensName) {
+    return new ENSIdentityManager({
+      ensName,
+      privateKey,
+      rpcUrl: process.env.SEPOLIA_RPC_URL
+    });
+  }
+  return new DemoIdentityProvider(ensName);
+}
+
+async function printModeBanner(): Promise<void> {
+  const hasZeroG = !!process.env.ZERO_G_PRIVATE_KEY;
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasENS = !!(process.env.ENS_PRIVATE_KEY && process.env.ENS_NAME);
+
+  console.log('\n=== ZeroAgent Demo — Mode ===');
+  console.log(`  Tool Generation : ${hasZeroG ? 'REAL 0G Compute' : hasOpenAI ? 'REAL OpenAI' : 'OFFLINE FALLBACK (no keys)'}`);
+  console.log(`  0G Storage      : ${hasZeroG ? 'REAL 0G Testnet' : 'OFFLINE (sha256 hash)'}`);
+  console.log(`  ENS Identity    : ${hasENS ? `REAL Sepolia (${process.env.ENS_NAME})` : 'MOCK (in-memory)'}`);
+  console.log(`  AXL P2P         : Will attempt real AXL, falls back to simulation`);
+  console.log('=============================\n');
+}
+
 function logStep(step: number, message: string): void {
   console.log(`\n${timestamp()} STEP ${step}: ${message}`);
 }
@@ -86,11 +113,17 @@ async function main(): Promise<void> {
   const packageRoot = fileURLToPath(new URL('..', import.meta.url));
   process.chdir(packageRoot);
 
+  await printModeBanner();
+
   const tempDir = await mkdtemp(join(tmpdir(), 'zero-agent-demo-'));
-  const researchIdentity = new DemoIdentityProvider('research-agent.eth');
-  const plannerIdentity = new DemoIdentityProvider('planner-agent.eth');
-  researchIdentity.setUrl(process.env.NEXT_PUBLIC_APP_URL ?? 'https://github.com/zero-agents/zero-agent');
-  plannerIdentity.setUrl(process.env.NEXT_PUBLIC_APP_URL ?? 'https://github.com/zero-agents/zero-agent');
+  const researchIdentity = createIdentity('research-agent.eth');
+  const plannerIdentity = createIdentity('planner-agent.eth');
+  if (researchIdentity instanceof DemoIdentityProvider) {
+    researchIdentity.setUrl(process.env.NEXT_PUBLIC_APP_URL ?? 'https://github.com/zero-agents/zero-agent');
+  }
+  if (plannerIdentity instanceof DemoIdentityProvider) {
+    plannerIdentity.setUrl(process.env.NEXT_PUBLIC_APP_URL ?? 'https://github.com/zero-agents/zero-agent');
+  }
 
   const researchAgent = new ResearchAgent({
     name: 'research-agent.eth',
@@ -154,11 +187,15 @@ async function main(): Promise<void> {
   }
 
   console.log('ENS text records set:');
-  for (const [key, value] of researchIdentity.entries()) {
-    console.log(`- research-agent.eth ${key}=${value}`);
+  if (researchIdentity instanceof DemoIdentityProvider) {
+    for (const [key, value] of researchIdentity.entries()) {
+      console.log(`- research-agent.eth ${key}=${value}`);
+    }
   }
-  for (const [key, value] of plannerIdentity.entries()) {
-    console.log(`- planner-agent.eth ${key}=${value}`);
+  if (plannerIdentity instanceof DemoIdentityProvider) {
+    for (const [key, value] of plannerIdentity.entries()) {
+      console.log(`- planner-agent.eth ${key}=${value}`);
+    }
   }
 
   console.log('AXL messages exchanged:');
