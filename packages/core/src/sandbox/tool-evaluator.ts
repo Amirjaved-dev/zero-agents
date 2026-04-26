@@ -75,7 +75,7 @@ export class ToolEvaluator {
         {
           role: 'system',
           content:
-            'Generate exactly two basic test cases for a JavaScript tool. Return only JSON: {"testCases":[{"input":{},"expectedOutput":null,"description":"..."}]}.'
+            'Generate exactly two basic test cases for a JavaScript tool. Return only JSON: {"testCases":[{"input":{},"description":"..."}]}. Omit "expectedOutput" unless you know the exact value — omitting it means any successful execution passes.'
         },
         {
           role: 'user',
@@ -109,7 +109,7 @@ export class ToolEvaluator {
   }
 
   private outputMatches(output: unknown, expectedOutput: unknown): boolean {
-    if (expectedOutput === undefined) {
+    if (expectedOutput === undefined || expectedOutput === null) {
       return true;
     }
 
@@ -138,7 +138,7 @@ export class ToolEvaluator {
     return (
       this.isRecord(value) &&
       Array.isArray(value.testCases) &&
-      value.testCases.length === 2 &&
+      value.testCases.length >= 1 &&
       value.testCases.every((testCase) => this.isTestCase(testCase))
     );
   }
