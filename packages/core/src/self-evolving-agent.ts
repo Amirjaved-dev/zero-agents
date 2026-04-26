@@ -18,6 +18,20 @@ export interface SelfEvolvingAgentConfig {
   axlPort?: number;
   registryPath?: string;
   axlEnabled?: boolean;
+  /** Maximum number of LLM generation attempts before giving up. Default: 3. */
+  maxGenerationAttempts?: number;
+  /** Total timeout (ms) for the entire tool evolution loop. Default: 120 000. */
+  evolutionTimeoutMs?: number;
+  /** Polling interval (ms) for the AXL /recv endpoint. Default: 500. */
+  axlPollIntervalMs?: number;
+  /** Timeout (ms) for LLM test-case generation per tool. Default: 30 000. */
+  testCaseTimeoutMs?: number;
+  /** Override the 0G EVM RPC endpoint. Defaults to the public 0G testnet. */
+  zeroGBlockchainRpc?: string;
+  /** Override the 0G Storage indexer endpoint. Defaults to the public 0G testnet indexer. */
+  zeroGIndexerRpc?: string;
+  /** How long (ms) to cache the downloaded tool index before re-fetching. Default: 60 000. */
+  indexCacheTtlMs?: number;
 }
 
 export interface AgentConfig {
@@ -26,6 +40,8 @@ export interface AgentConfig {
   axlPort?: number;
   registryPath?: string;
   axlEnabled?: boolean;
+  /** Polling interval (ms) for the AXL /recv endpoint. Default: 500. */
+  axlPollIntervalMs?: number;
 }
 
 export interface AgentState {
@@ -86,16 +102,31 @@ export class SelfEvolvingAgent extends EventEmitter {
 
     const zeroGPrivateKey = 'zeroGPrivateKey' in config ? config.zeroGPrivateKey : undefined;
     const openAiKey = 'openAiKey' in config ? config.openAiKey : undefined;
+    const zeroGBlockchainRpc = 'zeroGBlockchainRpc' in config ? config.zeroGBlockchainRpc : undefined;
+    const zeroGIndexerRpc = 'zeroGIndexerRpc' in config ? config.zeroGIndexerRpc : undefined;
+    const indexCacheTtlMs = 'indexCacheTtlMs' in config ? config.indexCacheTtlMs : undefined;
+    const maxGenerationAttempts = 'maxGenerationAttempts' in config ? config.maxGenerationAttempts : undefined;
+    const evolutionTimeoutMs = 'evolutionTimeoutMs' in config ? config.evolutionTimeoutMs : undefined;
+    const testCaseTimeoutMs = 'testCaseTimeoutMs' in config ? config.testCaseTimeoutMs : undefined;
+    const axlPollIntervalMs = config.axlPollIntervalMs;
 
-    this.registry = new ToolRegistry({ indexPointerPath: config.registryPath, zeroGPrivateKey });
+    this.registry = new ToolRegistry({
+      indexPointerPath: config.registryPath,
+      zeroGPrivateKey,
+      indexCacheTtlMs,
+      zeroGBlockchainRpc,
+      zeroGIndexerRpc
+    });
     this.sandbox = new ToolSandbox();
     this.evolutionEngine = new EvolutionEngine(
-      new ToolGenerator({ zeroGPrivateKey, openAiKey }),
+      new ToolGenerator({ zeroGPrivateKey, openAiKey, zeroGBlockchainRpc }),
       this.sandbox,
-      new ToolEvaluator(this.sandbox, openAiKey),
-      this.registry
+      new ToolEvaluator(this.sandbox, openAiKey, testCaseTimeoutMs),
+      this.registry,
+      evolutionTimeoutMs,
+      maxGenerationAttempts
     );
-    this.axlClient = new AXLClient({ axlPort: config.axlPort });
+    this.axlClient = new AXLClient({ axlPort: config.axlPort, pollIntervalMs: axlPollIntervalMs });
     this.axlEnabled = config.axlEnabled ?? true;
     this.evolutionEngine.on('step', (event) => this.emitStep(event));
     this.axlReady = this.axlEnabled ? this.initializeAXL() : Promise.resolve();
@@ -224,8 +255,14 @@ export class SelfEvolvingAgent extends EventEmitter {
         axlClient: this.axlClient
       });
       await this.coordinator.start();
-    } catch {
-      return;
+    } catch (error) {
+      // AXL is optional — agent continues without P2P if the node is unavailable.
+      // Emit a visible step event so callers are not silently surprised.
+      this.emitStep({
+        type: 'error',
+        message: `AXL initialization failed (agent will continue without P2P): ${this.getErrorMessage(error)}`,
+        data: { error }
+      });
     }
   }
 
