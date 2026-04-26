@@ -13,7 +13,8 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "demo": "tsx scripts/run-demo.ts"
   },
   "dependencies": {
     "@zero-agents/core": "workspace:*"
