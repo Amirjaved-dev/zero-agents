@@ -70,6 +70,46 @@ This will:
 3. Download the data back using the root hash
 4. Verify data integrity
 
+### Test Gensyn AXL Integration Locally
+
+The AXL workspace is intentionally local-only and ignored by Git at `local-axl/`.
+Use the tracked test script to clone the official Gensyn AXL repo, download a local Go toolchain if needed, build `node.exe`, start two peered local nodes, and verify `/send` plus `/recv` both ways.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/test-axl-local.ps1
+```
+
+The script uses these local ports:
+
+- Node A HTTP API: `http://127.0.0.1:9022`
+- Node B HTTP API: `http://127.0.0.1:9012`
+- Local peer listen port: `9101`
+- AXL internal TCP port: `7000`
+
+Expected success output:
+
+```text
+AXL local integration test passed
+```
+
+To leave both AXL nodes running after the test:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/test-axl-local.ps1 -KeepRunning
+```
+
+To stop only the local test nodes later:
+
+```powershell
+Get-Process | Where-Object { $_.Path -eq "$PWD\local-axl\axl\node.exe" } | Stop-Process
+```
+
+ZeroAgent's AXL client follows the official AXL HTTP API:
+
+- `GET /topology` reads this node's `our_public_key` as the AXL peer ID.
+- `POST /send` sends raw bytes with `X-Destination-Peer-Id`.
+- `GET /recv` polls for incoming messages and reads `X-From-Peer-Id`.
+
 ## Packages
 
 ### `@zero-agents/core`
