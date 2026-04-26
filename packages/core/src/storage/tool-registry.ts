@@ -50,6 +50,10 @@ export interface ToolRegistryOptions {
   zeroGPrivateKey?: string;
   /** How long (ms) to cache the downloaded index before re-fetching. Default 60 000. */
   indexCacheTtlMs?: number;
+  /** Override the 0G EVM RPC endpoint. Defaults to the public 0G testnet. */
+  zeroGBlockchainRpc?: string;
+  /** Override the 0G Storage indexer endpoint. Defaults to the public 0G testnet indexer. */
+  zeroGIndexerRpc?: string;
 }
 
 const INDEX_POINTER_FILE = '.zero-agent-index.json';
@@ -59,6 +63,8 @@ export class ToolRegistry {
   private readonly indexPointerPath: string;
   private readonly zeroGPrivateKey?: string;
   private readonly indexCacheTtlMs: number;
+  private readonly zeroGBlockchainRpc?: string;
+  private readonly zeroGIndexerRpc?: string;
 
   // In-memory cache for downloaded tool blobs (permanent until write invalidates it)
   private readonly toolCache = new Map<string, Tool>();
@@ -81,13 +87,19 @@ export class ToolRegistry {
     this.indexPointerPath = options.indexPointerPath ?? join(process.cwd(), INDEX_POINTER_FILE);
     this.zeroGPrivateKey = options.zeroGPrivateKey;
     this.indexCacheTtlMs = options.indexCacheTtlMs ?? DEFAULT_INDEX_CACHE_TTL_MS;
+    this.zeroGBlockchainRpc = options.zeroGBlockchainRpc;
+    this.zeroGIndexerRpc = options.zeroGIndexerRpc;
   }
 
   async saveTool(tool: Tool): Promise<string> {
     const toolToUpload: Tool = { ...tool };
     delete toolToUpload.rootHash;
 
-    const rootHash = await uploadToZeroG(toolToUpload, { privateKey: this.zeroGPrivateKey });
+    const rootHash = await uploadToZeroG(toolToUpload, {
+      privateKey: this.zeroGPrivateKey,
+      blockchainRpc: this.zeroGBlockchainRpc,
+      indexerRpc: this.zeroGIndexerRpc
+    });
     tool.rootHash = rootHash;
     this.toolCache.set(rootHash, { ...tool });
     await this.updateIndex(tool);
@@ -99,7 +111,7 @@ export class ToolRegistry {
     const cached = this.toolCache.get(rootHash);
     if (cached) return cached;
 
-    const data = await downloadFromZeroG(rootHash);
+    const data = await downloadFromZeroG(rootHash, { indexerRpc: this.zeroGIndexerRpc });
     const tool = this.parseTool(data);
     const result = { ...tool, rootHash };
 
@@ -194,7 +206,11 @@ export class ToolRegistry {
     });
 
     const indexFile = this.createIndexFile(metaIndex, history);
-    const indexRootHash = await uploadToZeroG(indexFile, { privateKey: this.zeroGPrivateKey });
+    const indexRootHash = await uploadToZeroG(indexFile, {
+      privateKey: this.zeroGPrivateKey,
+      blockchainRpc: this.zeroGBlockchainRpc,
+      indexerRpc: this.zeroGIndexerRpc
+    });
 
     await this.writeIndexPointer(indexRootHash);
     this.invalidateIndexCache();
@@ -230,7 +246,7 @@ export class ToolRegistry {
       return;
     }
 
-    const data = await downloadFromZeroG(indexRootHash);
+    const data = await downloadFromZeroG(indexRootHash, { indexerRpc: this.zeroGIndexerRpc });
     const metaIndex = new Map<string, ToolIndexEntry>();
     const history = new Map<string, string>();
 
