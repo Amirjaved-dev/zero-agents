@@ -56,18 +56,27 @@ export class ToolSandbox {
   }
 
   private async runWithIsolatedVm(ivm: IsolatedVm, toolCode: string, params: object, timeoutMs: number): Promise<unknown> {
-    let isolate: InstanceType<IsolatedVm['Isolate']> | undefined;
+    const Isolate = (ivm as any).Isolate || (ivm as any).default?.Isolate;
+    if (!Isolate) {
+      throw new Error('isolated-vm: Isolate not found in module');
+    }
+    const isolate = new Isolate({ memoryLimit: 16 }) as InstanceType<IsolatedVm['Isolate']>;
 
     try {
-      isolate = new ivm.Isolate({ memoryLimit: 16 });
       const context = await isolate.createContext();
 
-      return context.evalClosure(this.createSandboxSource(toolCode), [new ivm.ExternalCopy(params).copyInto()], {
+      const ExternalCopy = (ivm as any).ExternalCopy || (ivm as any).default?.ExternalCopy;
+      if (!ExternalCopy) {
+        throw new Error('isolated-vm: ExternalCopy not found in module');
+      }
+
+      const result = await context.evalClosure(this.createSandboxSource(toolCode), [new ExternalCopy(params).copyInto()], {
         timeout: timeoutMs,
         result: { promise: true, copy: true }
       });
+      return result;
     } finally {
-      isolate?.dispose();
+      isolate.dispose();
     }
   }
 

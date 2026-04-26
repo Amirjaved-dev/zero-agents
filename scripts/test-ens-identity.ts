@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   {
     const mgr = new ENSIdentityManager({
       ensName: 'ens.eth',
-      privateKey: fullKey ?? '0x0000000000000000000000000000000000000000000000000000000000000000001',
+      privateKey: fullKey ?? '0x0000000000000000000000000000000000000000000000000000000000000001',
       rpcUrl: SEPOLIA_RPC
     });
     const peerId = await mgr.getAXLPeerId();
