@@ -27,20 +27,33 @@ interface IndexPointerFile {
   rootHash: string;
 }
 
+export interface ToolRegistryOptions {
+  indexPointerPath?: string;
+  zeroGPrivateKey?: string;
+}
+
 const INDEX_POINTER_FILE = '.zero-agent-index.json';
 
 export class ToolRegistry {
   private readonly indexPointerPath: string;
+  private readonly zeroGPrivateKey?: string;
 
-  constructor(indexPointerPath = join(process.cwd(), INDEX_POINTER_FILE)) {
-    this.indexPointerPath = indexPointerPath;
+  constructor(options: string | ToolRegistryOptions = {}) {
+    if (typeof options === 'string') {
+      this.indexPointerPath = options;
+      this.zeroGPrivateKey = undefined;
+      return;
+    }
+
+    this.indexPointerPath = options.indexPointerPath ?? join(process.cwd(), INDEX_POINTER_FILE);
+    this.zeroGPrivateKey = options.zeroGPrivateKey;
   }
 
   async saveTool(tool: Tool): Promise<string> {
     const toolToUpload: Tool = { ...tool };
     delete toolToUpload.rootHash;
 
-    const rootHash = await uploadToZeroG(toolToUpload);
+    const rootHash = await uploadToZeroG(toolToUpload, { privateKey: this.zeroGPrivateKey });
     tool.rootHash = rootHash;
     await this.updateIndex(tool);
 
@@ -114,7 +127,7 @@ export class ToolRegistry {
     index.set(tool.name, tool.rootHash);
 
     const indexFile = this.createIndexFile(index);
-    const indexRootHash = await uploadToZeroG(indexFile);
+    const indexRootHash = await uploadToZeroG(indexFile, { privateKey: this.zeroGPrivateKey });
 
     await this.writeIndexPointer(indexRootHash);
     return indexRootHash;

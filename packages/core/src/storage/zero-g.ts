@@ -15,13 +15,17 @@ const IND_RPC = 'https://indexer-storage-testnet-turbo.0g.ai';
 type IndexerUploadSigner = Parameters<Indexer['upload']>[2];
 type UploadResponse = string | { rootHash: string; txHash?: string } | { rootHashes: string[]; txHashes?: string[] };
 
+export interface ZeroGStorageOptions {
+  privateKey?: string;
+}
+
 /**
  * Upload data to 0G storage
  * @param data - Object to store
  * @returns Root hash of the uploaded data
  */
-export async function uploadToZeroG(data: object): Promise<string> {
-  const privateKey = process.env.ZERO_G_PRIVATE_KEY;
+export async function uploadToZeroG(data: object, options: ZeroGStorageOptions = {}): Promise<string> {
+  const privateKey = options.privateKey ?? process.env.ZERO_G_PRIVATE_KEY;
   if (!privateKey) {
     throw new Error('ZERO_G_PRIVATE_KEY environment variable not set');
   }

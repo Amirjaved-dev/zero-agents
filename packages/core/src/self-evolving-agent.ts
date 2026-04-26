@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { EvolutionEngine, type EvolutionEvent } from './evolution-engine.js';
+import { ToolGenerator } from './generation/tool-generator.js';
+import { ToolEvaluator } from './sandbox/tool-evaluator.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
 import type { AgentIdentityProvider, AgentProfile } from './identity/types.js';
@@ -14,12 +16,16 @@ export interface SelfEvolvingAgentConfig {
   zeroGPrivateKey: string;
   openAiKey?: string;
   axlPort?: number;
+  registryPath?: string;
+  axlEnabled?: boolean;
 }
 
 export interface AgentConfig {
   name: string;
   description?: string;
   axlPort?: number;
+  registryPath?: string;
+  axlEnabled?: boolean;
 }
 
 export interface AgentState {
@@ -52,13 +58,15 @@ export class SelfEvolvingAgent extends EventEmitter {
   readonly description: string;
   readonly capabilities: string[];
 
-  private readonly registry: ToolRegistry;
-  private readonly sandbox: ToolSandbox;
-  private readonly evolutionEngine: EvolutionEngine;
+  protected readonly registry: ToolRegistry;
+  protected readonly sandbox: ToolSandbox;
+  protected readonly evolutionEngine: EvolutionEngine;
   private readonly state: AgentState;
   private readonly identity?: AgentIdentityProvider;
   private readonly axlClient: AXLClient;
   private readonly axlReady: Promise<void>;
+  private readonly axlEnabled: boolean;
+  private coordinator?: AgentCoordinator;
 
   constructor(config: SelfEvolvingAgentConfig | AgentConfig) {
     super();
@@ -73,20 +81,21 @@ export class SelfEvolvingAgent extends EventEmitter {
       metadata: {}
     };
 
-    if ('zeroGPrivateKey' in config) {
-      process.env.ZERO_G_PRIVATE_KEY = config.zeroGPrivateKey;
-    }
+    const zeroGPrivateKey = 'zeroGPrivateKey' in config ? config.zeroGPrivateKey : undefined;
+    const openAiKey = 'openAiKey' in config ? config.openAiKey : undefined;
 
-    if ('openAiKey' in config && config.openAiKey) {
-      process.env.OPENAI_API_KEY = config.openAiKey;
-    }
-
-    this.registry = new ToolRegistry();
+    this.registry = new ToolRegistry({ indexPointerPath: config.registryPath, zeroGPrivateKey });
     this.sandbox = new ToolSandbox();
-    this.evolutionEngine = new EvolutionEngine(undefined, this.sandbox, undefined, this.registry);
+    this.evolutionEngine = new EvolutionEngine(
+      new ToolGenerator({ zeroGPrivateKey, openAiKey }),
+      this.sandbox,
+      new ToolEvaluator(this.sandbox, openAiKey),
+      this.registry
+    );
     this.axlClient = new AXLClient({ axlPort: config.axlPort });
+    this.axlEnabled = config.axlEnabled ?? true;
     this.evolutionEngine.on('step', (event) => this.emitStep(event));
-    this.axlReady = this.initializeAXL();
+    this.axlReady = this.axlEnabled ? this.initializeAXL() : Promise.resolve();
   }
 
   override on(eventName: 'step', listener: (event: AgentStepEvent) => void): this;
@@ -135,21 +144,7 @@ export class SelfEvolvingAgent extends EventEmitter {
         wasGenerated = true;
       }
 
-      this.emitStep({ type: 'executing', message: `Executing tool ${tool.name}...`, data: { tool } });
-      const sandboxResult = await this.sandbox.run(tool.code, task.params ?? {});
-
-      if (!sandboxResult.success) {
-        throw new Error(sandboxResult.error ?? 'Tool execution failed');
-      }
-
-      await this.recordToolResult(tool, true);
-
-      const result: TaskResult = {
-        output: sandboxResult.output,
-        toolUsed: tool.name,
-        wasGenerated,
-        executionTimeMs: Date.now() - startedAt
-      };
+      const result = await this.executeWithTool(tool, task, wasGenerated, startedAt);
 
       this.emitStep({ type: 'done', message: 'Task complete.', data: result });
       return result;
@@ -174,6 +169,41 @@ export class SelfEvolvingAgent extends EventEmitter {
     return this.axlClient.sendTask(peerId, task);
   }
 
+  getRegistry(): ToolRegistry {
+    return this.registry;
+  }
+
+  getEvolutionEngine(): EvolutionEngine {
+    return this.evolutionEngine;
+  }
+
+  getCoordinator(): AgentCoordinator | null {
+    return this.coordinator ?? null;
+  }
+
+  dispose(): void {
+    this.coordinator?.stop();
+    this.axlClient.stop();
+  }
+
+  protected async executeWithTool(tool: Tool, task: TaskRequest, wasGenerated = false, startedAt = Date.now()): Promise<TaskResult> {
+    this.emitStep({ type: 'executing', message: `Executing tool ${tool.name}...`, data: { tool } });
+    const sandboxResult = await this.sandbox.run(tool.code, task.params ?? {});
+
+    if (!sandboxResult.success) {
+      throw new Error(sandboxResult.error ?? 'Tool execution failed');
+    }
+
+    await this.recordToolResult(tool, true);
+
+    return {
+      output: sandboxResult.output,
+      toolUsed: tool.name,
+      wasGenerated,
+      executionTimeMs: Date.now() - startedAt
+    };
+  }
+
   private async initializeAXL(): Promise<void> {
     try {
       const peerId = await this.axlClient.getPeerId();
@@ -187,12 +217,12 @@ export class SelfEvolvingAgent extends EventEmitter {
         }
       }
 
-      const coordinator = new AgentCoordinator({
+      this.coordinator = new AgentCoordinator({
         agent: this,
         registry: this.registry,
         axlClient: this.axlClient
       });
-      await coordinator.start();
+      await this.coordinator.start();
     } catch {
       return;
     }

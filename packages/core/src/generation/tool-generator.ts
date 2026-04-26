@@ -67,8 +67,27 @@ type ZeroGService = readonly [
   isAvailable: boolean
 ];
 
+export interface ToolGeneratorOptions {
+  fallbackToOpenAI?: boolean;
+  zeroGPrivateKey?: string;
+  openAiKey?: string;
+}
+
 export class ToolGenerator {
-  constructor(public readonly fallbackToOpenAI = true) {}
+  readonly fallbackToOpenAI: boolean;
+  private readonly zeroGPrivateKey?: string;
+  private readonly openAiKey?: string;
+
+  constructor(options: ToolGeneratorOptions | boolean = {}) {
+    if (typeof options === 'boolean') {
+      this.fallbackToOpenAI = options;
+      return;
+    }
+
+    this.fallbackToOpenAI = options.fallbackToOpenAI ?? true;
+    this.zeroGPrivateKey = options.zeroGPrivateKey;
+    this.openAiKey = options.openAiKey;
+  }
 
   async generateTool(taskDescription: string): Promise<Tool> {
     const responseText = await this.generateToolJson(taskDescription);
@@ -87,7 +106,7 @@ export class ToolGenerator {
     try {
       return await this.generateWithZeroG(taskDescription);
     } catch (error) {
-      if (!this.fallbackToOpenAI || !process.env.OPENAI_API_KEY) {
+      if (!this.fallbackToOpenAI || !this.getOpenAiKey()) {
         throw error;
       }
 
@@ -96,7 +115,7 @@ export class ToolGenerator {
   }
 
   private async generateWithZeroG(taskDescription: string): Promise<string> {
-    const privateKey = process.env.ZERO_G_PRIVATE_KEY;
+    const privateKey = this.zeroGPrivateKey ?? process.env.ZERO_G_PRIVATE_KEY;
     if (!privateKey) {
       throw new Error('ZERO_G_PRIVATE_KEY environment variable not set');
     }
@@ -156,7 +175,7 @@ export class ToolGenerator {
   }
 
   private async generateWithOpenAI(taskDescription: string): Promise<string> {
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = this.getOpenAiKey();
     if (!apiKey) {
       throw new Error('OPENAI_API_KEY environment variable not set');
     }
@@ -188,6 +207,10 @@ export class ToolGenerator {
         content: `Task description: ${taskDescription}`
       }
     ];
+  }
+
+  private getOpenAiKey(): string | undefined {
+    return this.openAiKey ?? process.env.OPENAI_API_KEY;
   }
 
   private parseGeneratedTool(responseText: string): GeneratedToolPayload {

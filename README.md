@@ -169,7 +169,9 @@ The `EvolutionEngine` orchestrates tool creation with a retry loop. On failure, 
 
 ### Isolated code execution
 
-Generated tools run in [`isolated-vm`](https://github.com/laverdet/isolated-vm) with a 16MB memory cap and 3-second timeout. No access to `require`, `process`, `fs`, or `eval`. If the tool requires `fetch`, execution falls back to Node.js `vm.createContext()` with `fetch` explicitly allowed and everything else blocked.
+Generated tools run in [`isolated-vm`](https://github.com/laverdet/isolated-vm) with a 16MB memory cap and 3-second timeout when the native module is available. Tools that require `fetch`, or environments where `isolated-vm` cannot load, use a restricted Node.js `vm.createContext()` fallback with `fetch` explicitly allowed.
+
+The Node `vm` fallback is a developer-convenience mode, not a hard security boundary for hostile code. Production deployments that execute untrusted generated tools should run ZeroAgent in a separate locked-down worker/container or disable network-capable tool execution until a stronger sandbox is configured.
 
 ### LLM-driven test generation
 
@@ -354,13 +356,13 @@ export class MyAgent extends SelfEvolvingAgent {
 
   async handleTask(task: TaskRequest): Promise<TaskResult> {
     // Check registry for an existing tool
-    const existing = await this.registry.searchTools(task.description);
+    const existing = await this.getRegistry().searchTools(task.description);
     if (existing.length > 0) {
       return this.executeWithTool(existing[0], task);
     }
 
     // Generate a new tool via the evolution engine
-    const tool = await this.evolutionEngine.evolve(
+    const tool = await this.getEvolutionEngine().evolve(
       task.description,
       { query: task.description }
     );
@@ -370,7 +372,7 @@ export class MyAgent extends SelfEvolvingAgent {
 }
 ```
 
-The base class handles tool generation, sandboxing, evaluation, and storage. You control when and how they're invoked.
+The base class handles tool generation, sandboxing, evaluation, storage, and execution helpers. You control when and how they're invoked.
 
 ---
 
@@ -387,6 +389,7 @@ const result = await agent.collaborateWith('research-agent.eth', {
 
 // Share your entire tool library with another agent
 const coordinator = agent.getCoordinator();
+if (!coordinator) throw new Error('AXL coordinator is not available');
 await coordinator.shareToolLibrary(peerId);
 ```
 
@@ -520,6 +523,8 @@ powershell -ExecutionPolicy Bypass -File scripts/test-axl-local.ps1 -KeepRunning
 | `test-agent.ts` | Full evolution loop: generate tool, sandbox, eval, save; second run reuses tool | `ZERO_G_PRIVATE_KEY` |
 | `test-ens-identity.ts` | 8 read tests (resolve address, get capabilities, get registry hash, get AXL peer ID, error handling); 3 write tests | Write tests require `ENS_PRIVATE_KEY` + `ENS_NAME` |
 | `test-axl-local.ps1` | Clones official AXL repo, builds `node.exe`, starts 2 peered nodes, sends messages both directions | Windows + internet access |
+
+Long-running apps can call `agent.dispose()` during shutdown to stop AXL polling and cancel pending requests.
 
 ---
 

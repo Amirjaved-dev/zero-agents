@@ -28,7 +28,10 @@ interface TestCasePayload {
 }
 
 export class ToolEvaluator {
-  constructor(private readonly sandbox = new ToolSandbox()) {}
+  constructor(
+    private readonly sandbox = new ToolSandbox(),
+    private readonly openAiKey?: string
+  ) {}
 
   async evaluate(tool: Tool, testCases?: TestCase[]): Promise<EvalResult> {
     const cases = testCases ?? (await this.generateTestCases(tool));
@@ -53,7 +56,7 @@ export class ToolEvaluator {
   }
 
   private async generateTestCases(tool: Tool): Promise<TestCase[]> {
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = this.openAiKey ?? process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return [
         {

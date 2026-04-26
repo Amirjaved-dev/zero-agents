@@ -72,6 +72,29 @@ export class AXLClient {
     this.ensurePolling();
   }
 
+  stopListening(onMessage: (msg: AgentMessage, fromPeerId: string) => void): void {
+    this.listeners.delete(onMessage);
+
+    if (this.listeners.size === 0 && this.pendingTaskRequests.size === 0) {
+      this.stop();
+    }
+  }
+
+  stop(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+
+    for (const [requestId, pending] of this.pendingTaskRequests) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(`AXL task request ${requestId} was cancelled`));
+    }
+
+    this.pendingTaskRequests.clear();
+    this.listeners.clear();
+  }
+
   async sendTask(toPeerId: string, task: TaskRequest): Promise<TaskResult> {
     this.ensurePolling();
 
@@ -113,6 +136,7 @@ export class AXLClient {
     this.pollTimer = setInterval(() => {
       void this.pollMessages();
     }, 500);
+    this.pollTimer.unref?.();
 
     void this.pollMessages();
   }

@@ -18,23 +18,32 @@ export class AgentCoordinator {
   private readonly agent: TaskHandlingAgent;
   private readonly registry: ToolRegistry;
   private readonly axlClient: AXLClient;
+  private readonly messageListener: (message: AgentMessage, fromPeerId: string) => void;
   private started = false;
 
   constructor(config: AgentCoordinatorConfig) {
     this.agent = config.agent;
     this.registry = config.registry;
     this.axlClient = config.axlClient ?? new AXLClient();
+    this.messageListener = (message, fromPeerId) => {
+      void this.handleMessage(message, fromPeerId).catch((error) => {
+        console.warn('Failed to handle AXL message:', error);
+      });
+    };
   }
 
   async start(): Promise<void> {
     if (this.started) return;
 
-    await this.axlClient.startListening((message, fromPeerId) => {
-      void this.handleMessage(message, fromPeerId).catch((error) => {
-        console.warn('Failed to handle AXL message:', error);
-      });
-    });
+    await this.axlClient.startListening(this.messageListener);
     this.started = true;
+  }
+
+  stop(): void {
+    if (!this.started) return;
+
+    this.axlClient.stopListening(this.messageListener);
+    this.started = false;
   }
 
   async shareToolLibrary(toPeerId: string): Promise<void> {
