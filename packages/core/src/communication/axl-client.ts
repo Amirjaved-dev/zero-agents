@@ -3,6 +3,8 @@ import type { TaskRequest, TaskResult } from '../self-evolving-agent.js';
 
 export interface AXLClientConfig {
   axlPort?: number;
+  /** How long (ms) to wait for a task_result before rejecting. Default 30 000. */
+  taskTimeoutMs?: number;
 }
 
 export interface AgentMessage {
@@ -27,6 +29,7 @@ interface ParsedInboxMessage {
 export class AXLClient {
   private readonly axlPort: number;
   private readonly baseUrl: string;
+  private readonly taskTimeoutMs: number;
   private readonly listeners = new Set<(msg: AgentMessage, fromPeerId: string) => void>();
   private readonly pendingTaskRequests = new Map<string, PendingTaskRequest>();
   private readonly seenMessageKeys = new Set<string>();
@@ -36,6 +39,7 @@ export class AXLClient {
   constructor(config: AXLClientConfig = {}) {
     this.axlPort = config.axlPort ?? 9002;
     this.baseUrl = `http://localhost:${this.axlPort}`;
+    this.taskTimeoutMs = config.taskTimeoutMs ?? 30_000;
   }
 
   async getPeerId(): Promise<string> {
@@ -109,8 +113,8 @@ export class AXLClient {
     const resultPromise = new Promise<TaskResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pendingTaskRequests.delete(requestId);
-        reject(new Error(`AXL task request ${requestId} timed out after 30000ms`));
-      }, 30_000);
+        reject(new Error(`AXL task request ${requestId} timed out after ${this.taskTimeoutMs}ms`));
+      }, this.taskTimeoutMs);
 
       this.pendingTaskRequests.set(requestId, { resolve, reject, timeout });
     });
@@ -219,7 +223,7 @@ export class AXLClient {
   private rememberMessageKey(messageKey: string): void {
     this.seenMessageKeys.add(messageKey);
 
-    if (this.seenMessageKeys.size <= 1_000) return;
+    if (this.seenMessageKeys.size < 1_000) return;
 
     const oldestKey = this.seenMessageKeys.values().next().value;
     if (typeof oldestKey === 'string') {
