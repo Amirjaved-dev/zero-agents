@@ -173,6 +173,8 @@ async function main(): Promise<void> {
 
   logStep(12, 'Planner sends task to research-agent.eth over AXL and receives a result');
   const axlResult = await plannerAgent.sendTaskOverAXL(researchAgent, { description: TASK_DESCRIPTION });
+  const axlMode = plannerAgent.wasLastAXLSimulated() ? 'SIMULATED (no local AXL node)' : 'REAL AXL P2P';
+  logHighlight(`AXL transport used: ${axlMode}`);
   printResult('AXL routed result', axlResult);
 
   const allTools = researchAgent.exportTools();

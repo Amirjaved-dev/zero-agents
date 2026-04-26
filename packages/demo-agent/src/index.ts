@@ -40,6 +40,7 @@ export class ResearchAgent extends SelfEvolvingAgent {
   private readonly allowOfflineStorage: boolean;
   private readonly saveRecords: ToolSaveRecord[] = [];
   private readonly axlMessages: AgentMessage[] = [];
+  private lastAXLTransportWasSimulated = false;
 
   constructor(options: ResearchAgentOptions = {}) {
     const config: SelfEvolvingAgentConfig = {
@@ -136,10 +137,12 @@ export class ResearchAgent extends SelfEvolvingAgent {
     try {
       this.emitDemoStep('executing', `[AXL] Sending task to ${toAgent.name} over real AXL P2P...`, {});
       const result = await this.collaborateWith(toAgent.name, task);
+      this.lastAXLTransportWasSimulated = false;
       this.emitDemoStep('done', `[AXL] Task result received from ${toAgent.name} over real AXL.`, result);
       return result;
     } catch (axlError) {
       const reason = axlError instanceof Error ? axlError.message : String(axlError);
+      this.lastAXLTransportWasSimulated = true;
       this.emitDemoStep('executing', `[AXL SIMULATION] AXL unavailable (${reason}). Using direct call.`, {});
     }
 
@@ -187,6 +190,11 @@ export class ResearchAgent extends SelfEvolvingAgent {
 
   getAXLMessages(): AgentMessage[] {
     return [...this.axlMessages];
+  }
+
+  /** Returns true if the last sendTaskOverAXL() call fell back to a direct in-process call. */
+  wasLastAXLSimulated(): boolean {
+    return this.lastAXLTransportWasSimulated;
   }
 
   private async findExistingTool(taskDescription: string): Promise<Tool | null> {
@@ -263,35 +271,14 @@ export class ResearchAgent extends SelfEvolvingAgent {
       summary: hit.title + ' is trending in current AI agent discussions.'
     }));
 
-  if (items.length === 0) {
-    items = [
-      {
-        rank: 1,
-        title: 'Enterprise teams keep testing autonomous coding agents',
-        url: 'https://example.com/ai-agent-coding',
-        summary: 'AI coding agents remain a leading trend because teams want measurable productivity gains.'
-      },
-      {
-        rank: 2,
-        title: 'Browser agents are moving from demos to real workflows',
-        url: 'https://example.com/browser-agents',
-        summary: 'Browser-use agents are gaining attention as products connect web automation with human approval loops.'
-      },
-      {
-        rank: 3,
-        title: 'Agent frameworks compete on memory, tools, and orchestration',
-        url: 'https://example.com/agent-frameworks',
-        summary: 'Developers are comparing frameworks by tool reuse, persistent memory, and multi-agent coordination.'
-      }
-    ];
-  }
-
   return {
     query,
     generatedAt: new Date().toISOString(),
     count: items.length,
     items,
-    summary: items.map((item) => item.rank + '. ' + item.title).join(' | ')
+    summary: items.length > 0
+      ? items.map((item) => item.rank + '. ' + item.title).join(' | ')
+      : 'No results returned by the search API for this query.'
   };
 }`,
       schema: {
