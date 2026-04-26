@@ -168,7 +168,8 @@ export class ToolSandbox {
       error instanceof Error &&
       (error.message.includes('No native build was found') ||
         error.message.includes('Cannot find module') ||
-        error.message.includes('ERR_DLOPEN_FAILED'))
+        error.message.includes('ERR_DLOPEN_FAILED') ||
+        error.message.includes('isolated-vm:'))
     );
   }
 
