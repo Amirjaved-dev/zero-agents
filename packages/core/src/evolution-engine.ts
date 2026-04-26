@@ -3,8 +3,9 @@ import { ToolGenerator } from './generation/tool-generator.js';
 import { ToolEvaluator, type EvalResult } from './sandbox/tool-evaluator.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
+import { ToolGenerationError } from './errors.js';
 
-const MAX_GENERATION_ATTEMPTS = 3;
+const DEFAULT_MAX_GENERATION_ATTEMPTS = 3;
 const DEFAULT_EVOLUTION_TIMEOUT_MS = 120_000;
 
 export interface EvolutionEvent {
@@ -15,16 +16,19 @@ export interface EvolutionEvent {
 
 export class EvolutionEngine extends EventEmitter {
   private readonly evolutionTimeoutMs: number;
+  private readonly maxGenerationAttempts: number;
 
   constructor(
     private readonly generator = new ToolGenerator(),
     private readonly sandbox = new ToolSandbox(),
     private readonly evaluator = new ToolEvaluator(sandbox),
     private readonly registry = new ToolRegistry(),
-    evolutionTimeoutMs = DEFAULT_EVOLUTION_TIMEOUT_MS
+    evolutionTimeoutMs = DEFAULT_EVOLUTION_TIMEOUT_MS,
+    maxGenerationAttempts = DEFAULT_MAX_GENERATION_ATTEMPTS
   ) {
     super();
     this.evolutionTimeoutMs = evolutionTimeoutMs;
+    this.maxGenerationAttempts = maxGenerationAttempts;
   }
 
   override on(eventName: 'step', listener: (event: EvolutionEvent) => void): this;
@@ -49,7 +53,7 @@ export class EvolutionEngine extends EventEmitter {
   private async runGenerationLoop(taskDescription: string, sampleParams: object): Promise<Tool> {
     let feedback: string | undefined;
 
-    for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt <= this.maxGenerationAttempts; attempt += 1) {
       const prompt = this.createGenerationPrompt(taskDescription, feedback);
       this.emitStep({ type: 'generating', message: `Generating tool attempt ${attempt}...`, data: { attempt } });
       const tool = await this.generator.generateTool(prompt);
@@ -75,7 +79,10 @@ export class EvolutionEngine extends EventEmitter {
       feedback = this.createRetryFeedback(evalResult);
     }
 
-    throw new Error(`Tool generation failed after ${MAX_GENERATION_ATTEMPTS} attempts. Last feedback: ${feedback ?? 'none'}`);
+    throw new ToolGenerationError(
+      `Tool generation failed after ${this.maxGenerationAttempts} attempts. Last feedback: ${feedback ?? 'none'}`,
+      this.maxGenerationAttempts
+    );
   }
 
   private emitStep(event: EvolutionEvent): void {
