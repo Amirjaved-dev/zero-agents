@@ -257,9 +257,9 @@ The `AgentCoordinator` handles deduplication, timeout (30s per task), and error 
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - pnpm 8+
-- A funded Ethereum wallet on Sepolia (for 0G storage gas and ENS writes)
+- A funded Ethereum wallet on Sepolia only when using 0G Storage or ENS writes
 
 ```bash
 git clone https://github.com/your-org/zero-agents
@@ -279,23 +279,58 @@ Build all packages:
 pnpm build
 ```
 
+For package consumers, the framework is already published:
+
+```bash
+npm install @zero-agents/core
+```
+
+### Windows and Native Dependency Notes
+
+`@zero-agents/core` depends on `isolated-vm`, a native Node.js module. Use Node.js 20 because it matches the package `engines` field and has the best prebuilt binary support for the current release.
+
+If installation falls back to a native build on Windows and fails with `node-gyp`, `MSBuild`, or C++ compiler errors, install Visual Studio Build Tools 2022 with the "Desktop development with C++" workload, then retry `npm install @zero-agents/core`.
+
+If `isolated-vm` cannot load at runtime, ZeroAgent falls back to Node's `vm` sandbox for supported tool execution. That fallback is useful for local development, but production deployments should run untrusted generated tools inside a locked-down worker or container.
+
 ---
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `ZERO_G_PRIVATE_KEY` | Yes | Ethereum private key for 0G storage operations |
+| `ZERO_G_PRIVATE_KEY` | Required for 0G | Ethereum private key for 0G storage operations |
 | `ENS_PRIVATE_KEY` | Optional | Ethereum private key controlling your agent's ENS name |
 | `ENS_NAME` | Optional | ENS name your agent will use (e.g. `my-agent.eth`) |
 | `OPENAI_API_KEY` | Optional | Fallback LLM if 0G Compute has no available providers |
 | `SEPOLIA_RPC_URL` | Optional | Custom Sepolia RPC. Defaults to `https://sepolia.drpc.org` |
 
-The minimum setup to run the demo is `ZERO_G_PRIVATE_KEY`. ENS writes require a wallet that controls the target `.eth` name. `OPENAI_API_KEY` enables tool generation if 0G Compute is unavailable.
+The zero-wallet smoke test does not require any environment variables. The minimum setup for persistent agent evolution is `ZERO_G_PRIVATE_KEY`. ENS writes require a wallet that controls the target `.eth` name. `OPENAI_API_KEY` enables tool generation if 0G Compute is unavailable.
 
 ---
 
 ## Quickstart
+
+### Zero-wallet local smoke test
+
+Use this first if you just want to verify the framework installed correctly. It does not call 0G, ENS, AXL, or any LLM.
+
+```typescript
+import { ToolSandbox } from '@zero-agents/core';
+
+const sandbox = new ToolSandbox();
+const result = await sandbox.run(
+  `async function execute(params) {
+    return { sum: params.a + params.b };
+  }`,
+  { a: 2, b: 3 }
+);
+
+console.log(result.output);
+// { sum: 5 }
+```
+
+### Full agent with 0G/ENS
 
 ```typescript
 import { SelfEvolvingAgent, ENSIdentityManager } from '@zero-agents/core';
@@ -312,6 +347,7 @@ const agent = new SelfEvolvingAgent({
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
   openAiKey: process.env.OPENAI_API_KEY,
   identity,
+  axlEnabled: false,
 });
 
 // Subscribe to step events
@@ -351,6 +387,7 @@ export class MyAgent extends SelfEvolvingAgent {
       capabilities: ['my-capability'],
       zeroGPrivateKey: options.zeroGKey,
       identity: options.identity,
+      axlEnabled: false,
     });
   }
 
@@ -733,7 +770,7 @@ interface AgentIdentityProvider {
 **Developer experience**
 
 - [ ] `create-zero-agent` CLI scaffold
-- [ ] npm package publish (`@zero-agents/core`)
+- [x] npm package publish (`@zero-agents/core@0.0.1`)
 - [ ] Tool library browser UI
 - [ ] Hosted demo on public testnet
 

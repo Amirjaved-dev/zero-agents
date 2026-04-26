@@ -4,11 +4,19 @@
 
 - Node.js 20+
 - pnpm 8+
-- A funded Ethereum wallet (Sepolia testnet) for 0G Storage uploads
+- A funded Ethereum wallet only when using 0G Storage or ENS writes
 
 ---
 
 ## Installation
+
+For app developers using the framework:
+
+```bash
+npm install @zero-agents/core
+```
+
+For contributors working in this repository:
 
 ```bash
 git clone <repo>
@@ -21,14 +29,14 @@ pnpm build
 
 ## Environment Variables
 
-Copy `.env.example` and fill in your values:
+Skip this section for the zero-wallet smoke test. Copy `.env.example` only when you are ready to use 0G Storage, ENS, or LLM-backed tool generation:
 
 ```bash
 cp .env.example .env
 ```
 
 ```env
-# Required: Ethereum private key (no 0x prefix) with Sepolia testnet ETH
+# Required for 0G Storage and 0G Compute: Ethereum private key (no 0x prefix) with testnet funds
 ZERO_G_PRIVATE_KEY=your_private_key_here
 
 # Optional: Fallback LLM when 0G Compute is unavailable
@@ -43,6 +51,31 @@ OPENAI_API_KEY=sk-...
 
 ## Quickstart
 
+### 1. Zero-wallet local smoke test
+
+Run this first to verify the package and sandbox work. It does not require a wallet, `.env`, 0G, ENS, AXL, or an LLM key.
+
+```typescript
+import { ToolSandbox } from '@zero-agents/core';
+
+const sandbox = new ToolSandbox();
+const result = await sandbox.run(
+  `async function execute(params) {
+    return { sum: params.a + params.b };
+  }`,
+  { a: 2, b: 3 }
+);
+
+if (!result.success) {
+  throw new Error(result.error);
+}
+
+console.log(result.output);
+// { sum: 5 }
+```
+
+### 2. Agent evolution with 0G storage
+
 ```typescript
 import { SelfEvolvingAgent } from '@zero-agents/core';
 
@@ -52,6 +85,7 @@ const agent = new SelfEvolvingAgent({
   capabilities: ['web-search', 'summarization'],
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
   openAiKey: process.env.OPENAI_API_KEY,   // optional fallback
+  axlEnabled: false,                       // local examples should not probe localhost:9002
 });
 
 // Listen to progress events
@@ -101,6 +135,16 @@ The demo agent (`packages/demo-agent/`) ships with a pre-built `web_search_and_s
 cd packages/demo-agent
 pnpm demo
 ```
+
+---
+
+## Windows and Native Dependencies
+
+`isolated-vm` is a native dependency. Use Node.js 20 to match `@zero-agents/core` and reduce native build issues.
+
+If install fails on Windows with `node-gyp`, `MSBuild`, or C++ compiler errors, install Visual Studio Build Tools with the "Desktop development with C++" workload and retry the install.
+
+If `isolated-vm` installs but cannot load, local development can still use the restricted Node `vm` fallback. Do not treat that fallback as a production security boundary for hostile generated code.
 
 ---
 

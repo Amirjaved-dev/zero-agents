@@ -1,10 +1,29 @@
 # Examples
 
-All examples assume `@zero-agents/core` is installed and environment variables are set. See [Getting Started](./getting-started.md).
+Examples that use 0G, ENS, or AXL require the matching environment variables. The first example is deterministic and runs without a wallet or network access. See [Getting Started](./getting-started.md).
 
 ---
 
-## 1. Basic Agent — Run a Task
+## 1. Zero-wallet Sandbox Smoke Test
+
+```typescript
+import { ToolSandbox } from '@zero-agents/core';
+
+const sandbox = new ToolSandbox();
+const result = await sandbox.run(
+  `async function execute(params) {
+    return { greeting: 'hello ' + params.name };
+  }`,
+  { name: 'ZeroAgent' }
+);
+
+console.log(result.output);
+// { greeting: 'hello ZeroAgent' }
+```
+
+---
+
+## 2. Basic Agent - Run a Task
 
 ```typescript
 import { SelfEvolvingAgent } from '@zero-agents/core';
@@ -15,6 +34,7 @@ const agent = new SelfEvolvingAgent({
   capabilities: ['web-search', 'summarization'],
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
   openAiKey: process.env.OPENAI_API_KEY,
+  axlEnabled: false,
 });
 
 agent.on('step', (event) => {
@@ -36,7 +56,7 @@ console.log(`wasGenerated: ${result.wasGenerated}`);
 
 ---
 
-## 2. Agent with ENS Identity
+## 3. Agent with ENS Identity
 
 Publishes the agent profile to ENS text records so other agents can discover it.
 
@@ -54,6 +74,7 @@ const agent = new SelfEvolvingAgent({
   capabilities: ['web-search', 'data-extraction'],
   identity,
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
+  axlEnabled: false,
 });
 
 // Run a task — after completion, toolRegistryHash auto-syncs to ENS
@@ -77,7 +98,7 @@ console.log(profile);
 
 ---
 
-## 3. Cross-Agent Collaboration via AXL
+## 4. Cross-Agent Collaboration via AXL
 
 Agent A delegates a task to Agent B over the Gensyn AXL network. Both agents must have AXL nodes running locally.
 
@@ -98,6 +119,7 @@ const agentB = new SelfEvolvingAgent({
   identity,
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
   axlPort: 9002,
+  axlEnabled: true,
 });
 
 // agentB is now listening for inbound tasks (AgentCoordinator starts automatically)
@@ -119,6 +141,7 @@ const agentA = new SelfEvolvingAgent({
   name: 'agent-a.eth',
   identity,
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
+  axlEnabled: true,
 });
 
 // Resolves agent-b.eth's AXL peer ID from ENS, then sends task over AXL
@@ -132,7 +155,7 @@ console.log(result.output);
 
 ---
 
-## 4. Direct ToolRegistry Usage
+## 5. Direct ToolRegistry Usage
 
 Use the registry independently of the agent — useful for inspecting, importing, or managing tools.
 
@@ -161,7 +184,7 @@ console.log(tool.code);
 
 ---
 
-## 5. Direct ToolSandbox Usage
+## 6. Direct ToolSandbox Usage
 
 Run arbitrary tool code in isolation, outside of the agent loop.
 
@@ -170,11 +193,11 @@ import { ToolSandbox } from '@zero-agents/core';
 
 const sandbox = new ToolSandbox();
 
-const code = `
+const code = `async function execute(params) {
   const response = await fetch('https://api.github.com/repos/anthropics/claude-code');
   const data = await response.json();
   return { stars: data.stargazers_count, forks: data.forks_count };
-`;
+}`;
 
 const result = await sandbox.run(code, {});
 
@@ -188,7 +211,7 @@ if (result.success) {
 
 ---
 
-## 6. Manual Tool Generation + Evaluation
+## 7. Manual Tool Generation + Evaluation
 
 Step through the evolution pipeline manually.
 
@@ -231,7 +254,7 @@ if (evalResult.passed) {
 
 ---
 
-## 7. Observing Agent Events
+## 8. Observing Agent Events
 
 Subscribe to granular step events for dashboards, logging, or debugging.
 
@@ -241,6 +264,7 @@ import { SelfEvolvingAgent } from '@zero-agents/core';
 const agent = new SelfEvolvingAgent({
   name: 'observer-demo',
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
+  axlEnabled: false,
 });
 
 const log: string[] = [];
@@ -266,7 +290,7 @@ try {
 
 ---
 
-## 8. Custom Identity Provider
+## 9. Custom Identity Provider
 
 Implement `AgentIdentityProvider` with a database instead of ENS.
 
@@ -311,12 +335,13 @@ const agent = new SelfEvolvingAgent({
   name: 'db-agent',
   identity: new DatabaseIdentityProvider(),
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
+  axlEnabled: false,
 });
 ```
 
 ---
 
-## 9. Running the Demo Agent
+## 10. Running the Demo Agent
 
 The demo agent ships with a hardcoded `web_search_and_summarize` tool and illustrates the full lifecycle without requiring ENS ownership.
 

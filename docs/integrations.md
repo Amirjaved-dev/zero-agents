@@ -146,6 +146,7 @@ const agent = new SelfEvolvingAgent({
   capabilities: ['web-search', 'summarization'],
   identity,
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
+  axlEnabled: false,
 });
 
 // Publish profile to ENS (writes all text records)
@@ -216,6 +217,7 @@ const agent = new SelfEvolvingAgent({
   name: 'my-agent.eth',
   identity,
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
+  axlEnabled: true,
 });
 
 // Resolves other-agent.eth's AXL peer ID via ENS, then sends task over AXL

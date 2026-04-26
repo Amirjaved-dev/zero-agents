@@ -31,6 +31,7 @@ new SelfEvolvingAgent(config: SelfEvolvingAgentConfig | AgentConfig)
   zeroGPrivateKey: string;          // Ethereum private key (Sepolia) for 0G transactions.
   openAiKey?: string;               // Optional OpenAI fallback key.
   axlPort?: number;                 // AXL node port. Default: 9002.
+  axlEnabled?: boolean;             // Default: true. Set false for local examples without AXL.
 }
 ```
 
@@ -41,6 +42,7 @@ new SelfEvolvingAgent(config: SelfEvolvingAgentConfig | AgentConfig)
   name: string;
   description?: string;
   axlPort?: number;
+  axlEnabled?: boolean;
 }
 ```
 
