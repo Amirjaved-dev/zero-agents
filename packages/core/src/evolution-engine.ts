@@ -5,6 +5,7 @@ import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
 
 const MAX_GENERATION_ATTEMPTS = 3;
+const DEFAULT_EVOLUTION_TIMEOUT_MS = 120_000;
 
 export interface EvolutionEvent {
   type: 'generating' | 'sandboxing' | 'evaluating' | 'saving';
@@ -13,13 +14,17 @@ export interface EvolutionEvent {
 }
 
 export class EvolutionEngine extends EventEmitter {
+  private readonly evolutionTimeoutMs: number;
+
   constructor(
     private readonly generator = new ToolGenerator(),
     private readonly sandbox = new ToolSandbox(),
     private readonly evaluator = new ToolEvaluator(sandbox),
-    private readonly registry = new ToolRegistry()
+    private readonly registry = new ToolRegistry(),
+    evolutionTimeoutMs = DEFAULT_EVOLUTION_TIMEOUT_MS
   ) {
     super();
+    this.evolutionTimeoutMs = evolutionTimeoutMs;
   }
 
   override on(eventName: 'step', listener: (event: EvolutionEvent) => void): this;
@@ -32,6 +37,16 @@ export class EvolutionEngine extends EventEmitter {
   }
 
   async generateTool(taskDescription: string, sampleParams: object = {}): Promise<Tool> {
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Tool generation timed out after ${this.evolutionTimeoutMs}ms`)),
+        this.evolutionTimeoutMs
+      )
+    );
+    return Promise.race([this.runGenerationLoop(taskDescription, sampleParams), timeoutPromise]);
+  }
+
+  private async runGenerationLoop(taskDescription: string, sampleParams: object): Promise<Tool> {
     let feedback: string | undefined;
 
     for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {

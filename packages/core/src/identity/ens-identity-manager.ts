@@ -181,9 +181,15 @@ export class ENSIdentityManager implements AgentIdentityProvider {
       records.push({ key: 'url', value: profile.url })
     }
 
-    await Promise.all(
+    const results = await Promise.allSettled(
       records.map((record) => resolver.write.setText([this.node, record.key, record.value]))
-    )
+    );
+
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed.length > 0) {
+      const reasons = failed.map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason))).join('; ');
+      throw new Error(`${failed.length} ENS text record(s) failed to update: ${reasons}`);
+    }
   }
 
   async discoverAgentsByCapability(
