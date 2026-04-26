@@ -285,7 +285,7 @@ setAXLPeerId(peerId: string): Promise<void>
 getAXLPeerIdForName(ensName: string): Promise<string | null>
 
 // Find agents that declare a specific capability.
-discoverAgentsByCapability(capability: string, agentNames?: string[]): Promise<AgentProfile[]>
+discoverAgentsByCapability(capability: string, agentNames: string[]): Promise<string[]>
 ```
 
 **Network:** Sepolia testnet. Resolver: `0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5`.
