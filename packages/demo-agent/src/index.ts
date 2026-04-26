@@ -69,29 +69,34 @@ export class ResearchAgent extends SelfEvolvingAgent {
 
     if (!tool) {
       this.emitDemoStep('miss', 'MISS: no reusable tool found in the registry.', { task });
-      this.emitDemoStep('generating', 'Generating tool web_search_and_summarize...', { toolName: 'web_search_and_summarize' });
-      tool = this.createWebSearchAndSummarizeTool();
-      wasGenerated = true;
 
-      this.emitDemoStep('sandboxing', `Sandbox testing generated tool ${tool.name}...`, { toolName: tool.name });
-      const sandboxResult = await this.demoSandbox.run(tool.code, { query: task.description });
-      if (!sandboxResult.success) {
-        throw new Error(sandboxResult.error ?? 'Generated tool failed sandbox test');
-      }
+      const hasLLMKey = !!(process.env.OPENAI_API_KEY ?? process.env.ZERO_G_PRIVATE_KEY);
 
-      this.emitDemoStep('evaluating', `Evaluating generated tool ${tool.name}...`, { toolName: tool.name });
-      const evalResult = await this.evaluator.evaluate(tool, [
-        {
-          input: { query: task.description },
-          description: 'Smoke test web search and summarization output'
+      if (hasLLMKey) {
+        this.emitDemoStep('generating', 'Generating tool via LLM (real evolution engine)...', { toolName: 'web_search_and_summarize' });
+        tool = await this.getEvolutionEngine().evolve(task.description, { query: task.description });
+      } else {
+        this.emitDemoStep('generating', '[OFFLINE] No LLM key — using built-in fallback tool...', { toolName: 'web_search_and_summarize' });
+        tool = this.createWebSearchAndSummarizeTool();
+
+        this.emitDemoStep('sandboxing', `Sandbox testing generated tool ${tool.name}...`, { toolName: tool.name });
+        const sandboxResult = await this.demoSandbox.run(tool.code, { query: task.description });
+        if (!sandboxResult.success) {
+          throw new Error(sandboxResult.error ?? 'Fallback tool sandbox failed');
         }
-      ]);
-      tool.successRate = evalResult.score;
 
-      if (!evalResult.passed) {
-        throw new Error(`Generated tool failed evaluation: ${evalResult.feedback}`);
+        this.emitDemoStep('evaluating', `Evaluating generated tool ${tool.name}...`, { toolName: tool.name });
+        const evalResult = await this.evaluator.evaluate(tool, [
+          { input: { query: task.description }, description: 'Smoke test' }
+        ]);
+        tool.successRate = evalResult.score;
+
+        if (!evalResult.passed) {
+          throw new Error(`Fallback tool failed evaluation: ${evalResult.feedback}`);
+        }
       }
 
+      wasGenerated = true;
       this.emitDemoStep('saving', `Saving generated tool ${tool.name} to 0G storage...`, { toolName: tool.name });
       await this.saveGeneratedTool(tool);
     }
@@ -127,6 +132,18 @@ export class ResearchAgent extends SelfEvolvingAgent {
   }
 
   async sendTaskOverAXL(toAgent: ResearchAgent, task: TaskRequest): Promise<TaskResult> {
+    // Try real AXL via parent's collaborateWith() (requires AXL node running + peer ID in identity)
+    try {
+      this.emitDemoStep('executing', `[AXL] Sending task to ${toAgent.name} over real AXL P2P...`, {});
+      const result = await this.collaborateWith(toAgent.name, task);
+      this.emitDemoStep('done', `[AXL] Task result received from ${toAgent.name} over real AXL.`, result);
+      return result;
+    } catch (axlError) {
+      const reason = axlError instanceof Error ? axlError.message : String(axlError);
+      this.emitDemoStep('executing', `[AXL SIMULATION] AXL unavailable (${reason}). Using direct call.`, {});
+    }
+
+    // Record simulated AXL message traffic for the demo summary
     const requestId = randomUUID();
     const taskMessage: AgentMessage = {
       type: 'task_request',
