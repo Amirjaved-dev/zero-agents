@@ -130,7 +130,6 @@ export class SelfEvolvingAgent extends EventEmitter {
     const startedAt = Date.now();
 
     try {
-      console.log('Searching for existing tool...');
       this.emitStep({ type: 'search', message: 'Searching for existing tool...', data: { task } });
 
       const tools = await this.registry.searchTools(task.description);
@@ -138,7 +137,6 @@ export class SelfEvolvingAgent extends EventEmitter {
       let wasGenerated = false;
 
       if (!tool || tool.successRate <= 0.5) {
-        console.log('No tool found. Generating new tool...');
         this.emitStep({ type: 'miss', message: 'No tool found. Generating new tool...', data: { task } });
         tool = await this.evolutionEngine.evolve(task.description, task.params ?? {});
         wasGenerated = true;
