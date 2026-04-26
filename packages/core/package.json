@@ -1,22 +1,54 @@
 {
   "name": "@zero-agents/core",
   "version": "0.0.1",
-  "description": "ZeroAgent framework core",
+  "description": "ENS-native self-evolving agent framework with persistent 0G tool memory",
   "type": "module",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Amirjaved-dev/zero-agents.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/Amirjaved-dev/zero-agents#readme",
+  "bugs": {
+    "url": "https://github.com/Amirjaved-dev/zero-agents/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "ai-agent",
+    "agents",
+    "zeroagent",
+    "0g",
+    "ens",
+    "ethereum",
+    "tool-generation",
+    "self-evolving",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepack": "pnpm build"
   },
   "dependencies": {
     "@0gfoundation/0g-ts-sdk": "^1.2.6",
@@ -28,5 +60,6 @@
   },
   "devDependencies": {
     "typescript": "^5.3.3"
-  }
+  },
+  "author": "ZeroAgent contributors"
 }
