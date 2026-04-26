@@ -118,7 +118,7 @@ export class ToolSandbox {
       fetch,
       params: structuredClone(params)
     });
-    const script = new Script(`(async () => { ${this.createSandboxSource(toolCode, false).split('$0').join('params')} })()`);
+    const script = new Script(`(async () => { ${this.createSandboxSource(toolCode, false, 'params')} })()`);
     const result = script.runInContext(context, { timeout: timeoutMs });
 
     return Promise.race([
@@ -129,7 +129,7 @@ export class ToolSandbox {
     ]);
   }
 
-  private createSandboxSource(toolCode: string, hasFetchBridge = false): string {
+  private createSandboxSource(toolCode: string, hasFetchBridge = false, paramsRef = '$0'): string {
     const fetchSetup = hasFetchBridge
       ? `
       // Wrap the host fetch bridge into a standard fetch()-compatible API
@@ -191,7 +191,7 @@ export class ToolSandbox {
       const eval = undefined;
 
       const execute = (${toolCode});
-      return execute($0);
+      return execute(${paramsRef});
     `;
   }
 
