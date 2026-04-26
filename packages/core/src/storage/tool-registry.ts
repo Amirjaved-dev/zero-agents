@@ -37,6 +37,7 @@ const INDEX_POINTER_FILE = '.zero-agent-index.json';
 export class ToolRegistry {
   private readonly indexPointerPath: string;
   private readonly zeroGPrivateKey?: string;
+  private readonly toolCache = new Map<string, Tool>();
 
   constructor(options: string | ToolRegistryOptions = {}) {
     if (typeof options === 'string') {
@@ -55,19 +56,22 @@ export class ToolRegistry {
 
     const rootHash = await uploadToZeroG(toolToUpload, { privateKey: this.zeroGPrivateKey });
     tool.rootHash = rootHash;
+    this.toolCache.set(rootHash, { ...tool });
     await this.updateIndex(tool);
 
     return rootHash;
   }
 
   async getTool(rootHash: string): Promise<Tool> {
+    const cached = this.toolCache.get(rootHash);
+    if (cached) return cached;
+
     const data = await downloadFromZeroG(rootHash);
     const tool = this.parseTool(data);
+    const result = { ...tool, rootHash };
 
-    return {
-      ...tool,
-      rootHash
-    };
+    this.toolCache.set(rootHash, result);
+    return result;
   }
 
   async getToolByName(name: string): Promise<Tool | null> {
