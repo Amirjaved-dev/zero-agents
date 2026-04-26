@@ -23,6 +23,19 @@ export interface ToolHistory {
   previous: string | null;
 }
 
+/**
+ * Compact metadata snapshot stored inside the index file alongside rootHash.
+ * Enables searchTools() to filter entirely from the cached index without
+ * downloading any tool blobs from 0G.
+ */
+interface ToolIndexEntry {
+  rootHash: string;
+  name: string;
+  description: string;
+  tags: string[];
+  successRate: number;
+}
+
 interface ToolIndexMeta {
   updatedAt: number;
   count: number;
@@ -47,12 +60,13 @@ export class ToolRegistry {
   private readonly zeroGPrivateKey?: string;
   private readonly indexCacheTtlMs: number;
 
-  // In-memory cache for downloaded tools (permanent until a write invalidates it)
+  // In-memory cache for downloaded tool blobs (permanent until write invalidates it)
   private readonly toolCache = new Map<string, Tool>();
 
-  // In-memory cache for the index (name → currentRootHash)
-  private cachedIndex: Map<string, string> | null = null;
-  // One-level history stored alongside the index (name → previousRootHash)
+  // Metadata-enriched index cache — stores ToolIndexEntry per tool name so
+  // searchTools() never needs to download individual blobs.
+  private cachedMetaIndex: Map<string, ToolIndexEntry> | null = null;
+  // One-level history (name → previousRootHash)
   private cachedHistory: Map<string, string> | null = null;
   private indexCacheExpiresAt = 0;
 
@@ -94,14 +108,10 @@ export class ToolRegistry {
   }
 
   async getToolByName(name: string): Promise<Tool | null> {
-    const index = await this.loadIndex();
-    const rootHash = index.get(name);
-
-    if (!rootHash) {
-      return null;
-    }
-
-    return this.getTool(rootHash);
+    await this.loadIndexData();
+    const entry = this.cachedMetaIndex?.get(name);
+    if (!entry) return null;
+    return this.getTool(entry.rootHash);
   }
 
   async getIndexRootHash(): Promise<string | null> {
@@ -110,38 +120,44 @@ export class ToolRegistry {
 
   /**
    * Returns the current and previous root hash for a tool.
-   * Previous hash is stored in the index's _history section on each update.
+   * Previous hash is preserved in the index's _history section on each update.
    */
   async getToolHistory(name: string): Promise<ToolHistory> {
     await this.loadIndexData();
     return {
-      current: this.cachedIndex?.get(name) ?? null,
+      current: this.cachedMetaIndex?.get(name)?.rootHash ?? null,
       previous: this.cachedHistory?.get(name) ?? null
     };
   }
 
+  /**
+   * Search tools by name, description, and tags.
+   * Uses the in-memory metadata index — zero 0G downloads.
+   */
   async searchTools(query: string): Promise<Tool[]> {
     const normalizedQuery = query.trim().toLowerCase();
-    const index = await this.loadIndex();
+    await this.loadIndexData();
 
-    if (!normalizedQuery || index.size === 0) {
+    if (!normalizedQuery || !this.cachedMetaIndex || this.cachedMetaIndex.size === 0) {
       return [];
     }
 
-    const tools = await Promise.all(
-      Array.from(index.values(), async (rootHash) => this.getTool(rootHash))
-    );
-
-    return tools
-      .map((tool) => ({ tool, score: this.scoreToolMatch(tool, normalizedQuery) }))
+    // Score and filter using only the cached metadata — no 0G calls
+    const scored = Array.from(this.cachedMetaIndex.values())
+      .map((entry) => ({ entry, score: this.scoreEntryMatch(entry, normalizedQuery) }))
       .filter((result) => result.score > 0)
-      .sort((a, b) => b.score - a.score || b.tool.successRate - a.tool.successRate)
-      .map((result) => result.tool);
+      .sort((a, b) => b.score - a.score || b.entry.successRate - a.entry.successRate);
+
+    // Download only the tools that matched (typically 1-3)
+    return Promise.all(scored.map(({ entry }) => this.getTool(entry.rootHash)));
   }
 
   async exportTools(): Promise<Tool[]> {
-    const index = await this.loadIndex();
-    return Promise.all(Array.from(index.values(), async (rootHash) => this.getTool(rootHash)));
+    await this.loadIndexData();
+    if (!this.cachedMetaIndex) return [];
+    return Promise.all(
+      Array.from(this.cachedMetaIndex.values(), (entry) => this.getTool(entry.rootHash))
+    );
   }
 
   async importTool(tool: Tool): Promise<string> {
@@ -158,60 +174,64 @@ export class ToolRegistry {
       throw new Error('Cannot update tool index without a rootHash');
     }
 
-    // Load current state before overwriting so we can preserve history
     await this.loadIndexData();
 
-    const index = this.cachedIndex ?? new Map<string, string>();
+    const metaIndex = this.cachedMetaIndex ?? new Map<string, ToolIndexEntry>();
     const history = this.cachedHistory ?? new Map<string, string>();
 
-    // Record current hash as previous before overwriting
-    const existingHash = index.get(tool.name);
-    if (existingHash && existingHash !== tool.rootHash) {
-      history.set(tool.name, existingHash);
+    // Preserve previous rootHash before overwriting
+    const existing = metaIndex.get(tool.name);
+    if (existing && existing.rootHash !== tool.rootHash) {
+      history.set(tool.name, existing.rootHash);
     }
 
-    index.set(tool.name, tool.rootHash);
+    metaIndex.set(tool.name, {
+      rootHash: tool.rootHash,
+      name: tool.name,
+      description: tool.description,
+      tags: tool.tags,
+      successRate: tool.successRate
+    });
 
-    const indexFile = this.createIndexFile(index, history);
+    const indexFile = this.createIndexFile(metaIndex, history);
     const indexRootHash = await uploadToZeroG(indexFile, { privateKey: this.zeroGPrivateKey });
 
     await this.writeIndexPointer(indexRootHash);
-
-    // Invalidate cache — fresh data will be fetched on next read
     this.invalidateIndexCache();
 
     return indexRootHash;
   }
 
+  /** Returns a map of tool name → rootHash (for callers that only need the hash). */
   async loadIndex(): Promise<Map<string, string>> {
     await this.loadIndexData();
-    return this.cachedIndex ?? new Map();
+    const result = new Map<string, string>();
+    for (const [name, entry] of (this.cachedMetaIndex ?? new Map())) {
+      result.set(name, entry.rootHash);
+    }
+    return result;
   }
 
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  /**
-   * Downloads and parses the index from 0G (or returns from in-memory cache).
-   * Populates both cachedIndex and cachedHistory.
-   */
   private async loadIndexData(): Promise<void> {
-    if (this.cachedIndex !== null && Date.now() < this.indexCacheExpiresAt) {
-      return; // Cache is fresh
+    if (this.cachedMetaIndex !== null && Date.now() < this.indexCacheExpiresAt) {
+      return;
     }
 
     const indexRootHash = await this.readIndexPointer();
 
     if (!indexRootHash) {
-      this.cachedIndex = new Map();
+      this.cachedMetaIndex = new Map();
       this.cachedHistory = new Map();
       this.indexCacheExpiresAt = Date.now() + this.indexCacheTtlMs;
       return;
     }
 
     const data = await downloadFromZeroG(indexRootHash);
-    const index = new Map<string, string>();
+    const metaIndex = new Map<string, ToolIndexEntry>();
     const history = new Map<string, string>();
 
     for (const [key, value] of Object.entries(data)) {
@@ -228,26 +248,43 @@ export class ToolRegistry {
         continue;
       }
 
-      if (typeof value !== 'string') {
-        throw new Error(`Invalid root hash for tool "${key}" in tool index`);
+      // New format: value is a ToolIndexEntry object
+      if (this.isToolIndexEntry(value)) {
+        metaIndex.set(key, value);
+        continue;
       }
 
-      index.set(key, value);
+      // Legacy format: value is a plain rootHash string
+      if (typeof value === 'string') {
+        metaIndex.set(key, {
+          rootHash: value,
+          name: key,
+          description: '',
+          tags: [],
+          successRate: 0
+        });
+        continue;
+      }
+
+      throw new Error(`Invalid index entry for tool "${key}"`);
     }
 
-    this.cachedIndex = index;
+    this.cachedMetaIndex = metaIndex;
     this.cachedHistory = history;
     this.indexCacheExpiresAt = Date.now() + this.indexCacheTtlMs;
   }
 
   private invalidateIndexCache(): void {
-    this.cachedIndex = null;
+    this.cachedMetaIndex = null;
     this.cachedHistory = null;
     this.indexCacheExpiresAt = 0;
   }
 
-  private createIndexFile(index: Map<string, string>, history: Map<string, string>): Record<string, unknown> {
-    const indexFile: Record<string, unknown> = Object.fromEntries(index);
+  private createIndexFile(
+    metaIndex: Map<string, ToolIndexEntry>,
+    history: Map<string, string>
+  ): Record<string, unknown> {
+    const indexFile: Record<string, unknown> = Object.fromEntries(metaIndex);
 
     if (history.size > 0) {
       indexFile._history = Object.fromEntries(history);
@@ -255,15 +292,15 @@ export class ToolRegistry {
 
     const meta: ToolIndexMeta = {
       updatedAt: Date.now(),
-      count: index.size
+      count: metaIndex.size
     };
     indexFile._meta = meta;
 
     return indexFile;
   }
 
-  private scoreToolMatch(tool: Tool, normalizedQuery: string): number {
-    const searchableText = [tool.name, tool.description, ...tool.tags]
+  private scoreEntryMatch(entry: ToolIndexEntry, normalizedQuery: string): number {
+    const searchableText = [entry.name, entry.description, ...entry.tags]
       .join(' ')
       .toLowerCase();
 
@@ -272,9 +309,7 @@ export class ToolRegistry {
     }
 
     const queryTerms = new Set(normalizedQuery.match(/[a-z0-9]+/g) ?? []);
-    if (queryTerms.size === 0) {
-      return 0;
-    }
+    if (queryTerms.size === 0) return 0;
 
     let matchedTerms = 0;
     for (const term of queryTerms) {
@@ -347,6 +382,18 @@ export class ToolRegistry {
       createdAt: data.createdAt,
       rootHash: typeof data.rootHash === 'string' ? data.rootHash : undefined
     };
+  }
+
+  private isToolIndexEntry(value: unknown): value is ToolIndexEntry {
+    return (
+      this.isRecord(value) &&
+      typeof value.rootHash === 'string' &&
+      typeof value.name === 'string' &&
+      typeof value.description === 'string' &&
+      Array.isArray(value.tags) &&
+      value.tags.every((t) => typeof t === 'string') &&
+      typeof value.successRate === 'number'
+    );
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {
