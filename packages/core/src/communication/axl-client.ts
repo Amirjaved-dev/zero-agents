@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { TaskRequest, TaskResult } from '../self-evolving-agent.js';
+import { AXLError } from '../errors.js';
 
 export interface AXLClientConfig {
   axlPort?: number;
   /** How long (ms) to wait for a task_result before rejecting. Default 30 000. */
   taskTimeoutMs?: number;
+  /** How often (ms) to poll the AXL /recv endpoint for new messages. Default 500. */
+  pollIntervalMs?: number;
 }
 
 export interface AgentMessage {
@@ -30,6 +33,7 @@ export class AXLClient {
   private readonly axlPort: number;
   private readonly baseUrl: string;
   private readonly taskTimeoutMs: number;
+  private readonly pollIntervalMs: number;
   private readonly listeners = new Set<(msg: AgentMessage, fromPeerId: string) => void>();
   private readonly pendingTaskRequests = new Map<string, PendingTaskRequest>();
   private readonly seenMessageKeys = new Set<string>();
@@ -40,17 +44,18 @@ export class AXLClient {
     this.axlPort = config.axlPort ?? 9002;
     this.baseUrl = `http://localhost:${this.axlPort}`;
     this.taskTimeoutMs = config.taskTimeoutMs ?? 30_000;
+    this.pollIntervalMs = config.pollIntervalMs ?? 500;
   }
 
   async getPeerId(): Promise<string> {
     const response = await fetch(`${this.baseUrl}/topology`);
     if (!response.ok) {
-      throw new Error(`AXL /topology failed with status ${response.status}`);
+      throw new AXLError(`AXL /topology failed with status ${response.status}`);
     }
 
     const data: unknown = await response.json();
     if (!this.isRecord(data) || typeof data.our_public_key !== 'string' || data.our_public_key.length === 0) {
-      throw new Error('AXL /topology response did not include our_public_key');
+      throw new AXLError('AXL /topology response did not include our_public_key');
     }
 
     return data.our_public_key;
@@ -67,7 +72,7 @@ export class AXLClient {
     });
 
     if (!response.ok) {
-      throw new Error(`AXL /send failed with status ${response.status}`);
+      throw new AXLError(`AXL /send failed with status ${response.status}`);
     }
   }
 
@@ -92,7 +97,7 @@ export class AXLClient {
 
     for (const [requestId, pending] of this.pendingTaskRequests) {
       clearTimeout(pending.timeout);
-      pending.reject(new Error(`AXL task request ${requestId} was cancelled`));
+      pending.reject(new AXLError(`AXL task request ${requestId} was cancelled`));
     }
 
     this.pendingTaskRequests.clear();
@@ -113,7 +118,7 @@ export class AXLClient {
     const resultPromise = new Promise<TaskResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pendingTaskRequests.delete(requestId);
-        reject(new Error(`AXL task request ${requestId} timed out after ${this.taskTimeoutMs}ms`));
+        reject(new AXLError(`AXL task request ${requestId} timed out after ${this.taskTimeoutMs}ms`));
       }, this.taskTimeoutMs);
 
       this.pendingTaskRequests.set(requestId, { resolve, reject, timeout });
@@ -139,7 +144,7 @@ export class AXLClient {
 
     this.pollTimer = setInterval(() => {
       void this.pollMessages();
-    }, 500);
+    }, this.pollIntervalMs);
     this.pollTimer.unref?.();
 
     void this.pollMessages();
