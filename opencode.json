@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "firecrawl": {
+      "type": "local",
+      "command": ["npx", "-y", "firecrawl-mcp"],
+      "environment": {
+        "FIRECRAWL_API_KEY": "fc-cd228a80800a49108252d26a5f4fa9c6"
+      },
+      "enabled": true
+    }
+  }
+}

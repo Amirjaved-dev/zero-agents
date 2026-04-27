@@ -62,6 +62,11 @@ export { ToolSandbox } from './sandbox/tool-sandbox.js';
  */
 export { ToolEvaluator } from './sandbox/tool-evaluator.js';
 
+// ─── Reflection ──────────────────────────────────────────────────────────────
+
+/** Produces deterministic post-task learning data without external API calls. */
+export { ReflectionEngine } from './reflection/reflection-engine.js';
+
 // ─── Identity ────────────────────────────────────────────────────────────────
 
 /**
@@ -147,6 +152,9 @@ export type { TaskResult } from './self-evolving-agent.js';
 
 /** Event emitted by {@link EvolutionEngine} on each generation step. */
 export type { EvolutionEvent } from './evolution-engine.js';
+
+/** Input and output types for post-task reflection. */
+export type { ReflectionInput, ReflectionResult, RecommendedStrategy } from './reflection/reflection-engine.js';
 
 /** Interface for identity providers (ENS, mock, etc.). */
 export type { AgentIdentityProvider, AgentProfile } from './identity/index.js';
