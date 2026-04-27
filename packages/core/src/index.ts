@@ -56,6 +56,9 @@ export { ExperienceMemory } from './memory/experience-memory.js';
  */
 export { ToolGenerator } from './generation/tool-generator.js';
 
+/** Creates improved tool candidates from failed tools using a configured generator. */
+export { ToolImprover } from './tools/tool-improver.js';
+
 // ─── Sandbox ─────────────────────────────────────────────────────────────────
 
 /**
@@ -136,6 +139,9 @@ export type { ZeroGStorageOptions } from './storage/zero-g.js';
 
 /** Constructor options for {@link ToolGenerator}. */
 export type { ToolGeneratorOptions } from './generation/tool-generator.js';
+
+/** Candidate produced by {@link ToolImprover} before saving or evaluation. */
+export type { ImprovedToolCandidate, OriginalToolForImprovement, ToolImproverInput, ToolImproverOptions } from './tools/tool-improver.js';
 
 /** Return value from `ToolSandbox.run()`. */
 export type { SandboxResult } from './sandbox/tool-sandbox.js';
