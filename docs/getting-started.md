@@ -144,7 +144,7 @@ pnpm demo
 
 If install fails on Windows with `node-gyp`, `MSBuild`, or C++ compiler errors, install Visual Studio Build Tools with the "Desktop development with C++" workload and retry the install.
 
-If `isolated-vm` installs but cannot load, local development can still use the restricted Node `vm` fallback. Do not treat that fallback as a production security boundary for hostile generated code.
+If `isolated-vm` installs but cannot load, local development can explicitly opt into the restricted Node `vm` fallback with `new ToolSandbox({ allowUnsafeNodeVmFallback: true })`. Do not treat that fallback as a production security boundary for hostile generated code.
 
 ---
 

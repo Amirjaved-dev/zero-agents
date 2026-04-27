@@ -144,7 +144,7 @@ export type { ToolGeneratorOptions } from './generation/tool-generator.js';
 export type { ImprovedToolCandidate, OriginalToolForImprovement, ToolImproverInput, ToolImproverOptions } from './tools/tool-improver.js';
 
 /** Return value from `ToolSandbox.run()`. */
-export type { SandboxResult } from './sandbox/tool-sandbox.js';
+export type { SandboxResult, ToolSandboxOptions } from './sandbox/tool-sandbox.js';
 
 /** Return value from `ToolEvaluator.evaluate()`. */
 export type { EvalResult, TestCase, TestCaseResult } from './sandbox/tool-evaluator.js';

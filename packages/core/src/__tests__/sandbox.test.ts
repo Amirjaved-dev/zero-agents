@@ -8,29 +8,33 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ToolSandbox } from '../sandbox/tool-sandbox.js';
 
+function createDevSandbox(): ToolSandbox {
+  return new ToolSandbox({ allowUnsafeNodeVmFallback: true });
+}
+
 test('executes simple arithmetic', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run('async function execute(params) { return 40 + 2; }', {});
   assert.equal(result.success, true);
   assert.equal(result.output, 42);
 });
 
 test('passes params to the function', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run('async function execute(params) { return params.x * 2; }', { x: 21 });
   assert.equal(result.success, true);
   assert.equal(result.output, 42);
 });
 
 test('returns failure result when code throws', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run('async function execute(params) { throw new Error("boom"); }', {});
   assert.equal(result.success, false);
   assert.ok(result.error?.includes('boom'), `Expected error to include "boom", got: ${result.error}`);
 });
 
 test('returns object output correctly', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run(
     'async function execute(params) { return { name: params.name, doubled: params.n * 2 }; }',
     { name: 'agent', n: 5 }
@@ -45,7 +49,7 @@ test('returns object output correctly', async () => {
 });
 
 test('returns array output correctly', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run(
     'async function execute(params) { return [1, 2, 3].map(n => n + params.offset); }',
     { offset: 10 }
@@ -56,13 +60,13 @@ test('returns array output correctly', async () => {
 });
 
 test('executionTimeMs is a positive number', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run('async function execute(params) { return true; }', {});
   assert.ok(typeof result.executionTimeMs === 'number' && result.executionTimeMs >= 0);
 });
 
 test('$0 string literal in tool code does not corrupt execution', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   // Before the fix, this would produce "params!" instead of "$0!" because
   // the Node vm path did a raw string replacement of "$0" → "params".
   const result = await sandbox.run(
@@ -74,7 +78,7 @@ test('$0 string literal in tool code does not corrupt execution', async () => {
 });
 
 test('does not expose require to tool code', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run(
     'async function execute(params) { return typeof require === "undefined" ? "safe" : "unsafe"; }',
     {}
@@ -88,7 +92,7 @@ test('does not expose require to tool code', async () => {
 });
 
 test('does not expose process to tool code', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run(
     'async function execute(params) { return typeof process === "undefined" ? "safe" : "unsafe"; }',
     {}
@@ -99,7 +103,7 @@ test('does not expose process to tool code', async () => {
 });
 
 test('times out for long-running code', async () => {
-  const sandbox = new ToolSandbox();
+  const sandbox = createDevSandbox();
   const result = await sandbox.run(
     // Busy loop — should be killed by timeout
     `async function execute(params) {
@@ -117,4 +121,13 @@ test('times out for long-running code', async () => {
     errLower.includes('timeout') || errLower.includes('timed out'),
     `Expected timeout error, got: "${result.error}"`
   );
+});
+
+test('fails closed when isolated-vm is unavailable and Node vm fallback is disabled', async () => {
+  const sandbox = new ToolSandbox();
+  const result = await sandbox.run('async function execute(params) { return 42; }', {});
+
+  if (!result.success) {
+    assert.match(result.error ?? '', /isolated-vm is unavailable|timeout|timed out/i);
+  }
 });

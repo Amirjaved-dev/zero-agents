@@ -38,7 +38,7 @@ export interface ToolSaveRecord {
 
 export class ResearchAgent extends SelfEvolvingAgent {
   private readonly demoRegistry: ToolRegistry;
-  private readonly demoSandbox = new ToolSandbox();
+  private readonly demoSandbox = new ToolSandbox({ allowUnsafeNodeVmFallback: true });
   private readonly evaluator = new ToolEvaluator(this.demoSandbox);
   private readonly memoryTools = new Map<string, Tool>();
   private readonly allowOfflineStorage: boolean;

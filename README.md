@@ -310,7 +310,7 @@ Package consumers can install the core package when published:
 npm install @zero-agents/core
 ```
 
-Native dependency note: `isolated-vm` is used when available. If it cannot load, `ToolSandbox` falls back to Node's `vm` module. The fallback is useful for development but should not be treated as a strong security boundary for hostile code.
+Native dependency note: `isolated-vm` is used by default. If it cannot load, `ToolSandbox` fails closed unless you explicitly opt into `allowUnsafeNodeVmFallback`. The fallback is useful for development but should not be treated as a strong security boundary for hostile code.
 
 ---
 

@@ -86,7 +86,7 @@ SEPOLIA_RPC_URL=https://sepolia.drpc.org
 
 ## Sandbox Note
 
-Generated tools use `isolated-vm` when available. Tools that require `fetch`, or environments where `isolated-vm` cannot load, use a restricted Node `vm` fallback. Node `vm` is not a hard security boundary for hostile code; run untrusted generated tools inside a locked-down worker/container for production deployments.
+Generated tools use `isolated-vm` by default. A restricted Node `vm` fallback exists only when explicitly enabled with `new ToolSandbox({ allowUnsafeNodeVmFallback: true })`. Node `vm` is not a hard security boundary for hostile code; run untrusted generated tools inside a locked-down worker/container for production deployments.
 
 ## Repository
 

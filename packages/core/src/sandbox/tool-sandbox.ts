@@ -4,12 +4,26 @@ type IsolatedVm = typeof import('isolated-vm');
 
 export interface SandboxResult {
   success: boolean;
-  output: any;
+  output: unknown;
   error?: string;
   executionTimeMs: number;
 }
 
+export interface ToolSandboxOptions {
+  /**
+   * Development-only fallback. Node's vm module is not a hard security boundary
+   * for hostile generated code, so production callers should keep this false.
+   */
+  allowUnsafeNodeVmFallback?: boolean;
+}
+
 export class ToolSandbox {
+  private readonly allowUnsafeNodeVmFallback: boolean;
+
+  constructor(options: ToolSandboxOptions = {}) {
+    this.allowUnsafeNodeVmFallback = options.allowUnsafeNodeVmFallback ?? false;
+  }
+
   async run(toolCode: string, params: object, timeoutMs = 3000): Promise<SandboxResult> {
     const startedAt = Date.now();
 
@@ -25,6 +39,13 @@ export class ToolSandbox {
     } catch (error) {
       if (!this.isIsolatedVmLoadError(error)) {
         return this.createFailureResult(error, startedAt);
+      }
+
+      if (!this.allowUnsafeNodeVmFallback) {
+        return this.createFailureResult(
+          new Error('isolated-vm is unavailable and unsafe Node vm fallback is disabled'),
+          startedAt
+        );
       }
 
       try {
