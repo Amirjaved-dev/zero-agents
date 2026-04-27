@@ -1,6 +1,13 @@
 import type { ExperienceRecord } from '../memory/experience-memory.js';
 import type { Tool } from '../storage/tool-registry.js';
 
+const MIN_TOOL_MATCH_SCORE = 0.35;
+const STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'current', 'do', 'fetch', 'for',
+  'from', 'get', 'give', 'in', 'is', 'it', 'me', 'number', 'of', 'on', 'or', 'return',
+  'show', 'summarize', 'the', 'to', 'top', 'with'
+]);
+
 export type StrategyName =
   | 'reuse_existing_tool'
   | 'generate_new_tool'
@@ -118,7 +125,7 @@ export class StrategyAdapter {
       return 1;
     }
 
-    const queryTerms = new Set(normalizedTask.match(/[a-z0-9]+/g) ?? []);
+    const queryTerms = this.extractSignalTerms(normalizedTask);
     if (queryTerms.size === 0) {
       return 0;
     }
@@ -130,6 +137,14 @@ export class StrategyAdapter {
       }
     }
 
-    return matchedTerms / queryTerms.size;
+    const score = matchedTerms / queryTerms.size;
+    return score >= MIN_TOOL_MATCH_SCORE ? score : 0;
+  }
+
+  private extractSignalTerms(value: string): Set<string> {
+    return new Set(
+      (value.match(/[a-z0-9]+/g) ?? [])
+        .filter((term) => term.length > 2 && !STOP_WORDS.has(term))
+    );
   }
 }
