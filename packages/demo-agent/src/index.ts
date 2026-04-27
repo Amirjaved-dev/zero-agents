@@ -8,12 +8,15 @@ import {
   type AgentMessage,
   type AgentStepEvent,
   type SelfEvolvingAgentConfig,
+  type StrategyDecision,
+  type StrategyName,
   type TaskRequest,
   type TaskResult,
   type Tool
 } from '@zero-agents/core';
 
 export const RESEARCH_AGENT_CAPABILITIES = ['web-research', 'data-extraction', 'summarization'] as const;
+const DEMO_TOOL_TIMEOUT_MS = 10_000;
 
 export interface ResearchAgentOptions {
   name?: string;
@@ -64,17 +67,40 @@ export class ResearchAgent extends SelfEvolvingAgent {
   override async handleTask(task: TaskRequest): Promise<TaskResult> {
     const startedAt = Date.now();
     let selectedToolName: string | undefined;
-    let strategy = 'reuse_existing_tool';
+    let strategy: StrategyName = 'reuse_existing_tool';
+    let strategyDecision: StrategyDecision | undefined;
 
     try {
       this.emitDemoStep('search', 'Searching registry for a matching research tool...', { task });
-      const existingTool = await this.findExistingTool(task.description);
+      const availableTools = await this.findAvailableTools(task.description);
+      this.emitDemoStep('strategy', 'Checking past experience...', { task });
+      const similarExperiences = await this.getExperienceMemory().findSimilarExperiences(task.description);
+      strategyDecision = this.getStrategyAdapter().selectStrategy({
+        task: task.description,
+        agentName: this.name,
+        availableTools,
+        similarExperiences
+      });
+      strategy = strategyDecision.strategy;
+      this.emitDemoStep('strategy', `Strategy selected: ${strategyDecision.strategy}`, strategyDecision);
+      this.emitDemoStep('strategy', `Reason: ${strategyDecision.reason}`, strategyDecision);
 
-      let tool = existingTool;
+      if (strategyDecision.strategy === 'reject_task') {
+        const result = this.createRejectionResult(strategyDecision, startedAt);
+        await this.reflectAndSaveExperience(task, result, strategyDecision.strategy);
+        this.emitDemoStep('done', 'Task complete.', result);
+        return result;
+      }
+
+      let tool = strategyDecision.strategy === 'reuse_existing_tool'
+        ? this.findSelectedTool(availableTools, strategyDecision) ?? this.findBestDemoTool(availableTools)
+        : null;
       let wasGenerated = false;
 
-      if (!tool) {
-        strategy = 'generate_new_tool';
+      if (!tool || tool.successRate <= 0.5 || strategyDecision.strategy !== 'reuse_existing_tool') {
+        strategy = !tool || tool.successRate <= 0.5 || strategyDecision.strategy === 'ask_another_agent'
+          ? 'generate_new_tool'
+          : strategyDecision.strategy;
         this.emitDemoStep('miss', 'MISS: no reusable tool found in the registry.', { task });
 
         const hasLLMKey = !!(process.env.OPENAI_API_KEY ?? process.env.ZERO_G_PRIVATE_KEY);
@@ -87,7 +113,7 @@ export class ResearchAgent extends SelfEvolvingAgent {
           tool = this.createWebSearchAndSummarizeTool();
 
           this.emitDemoStep('sandboxing', `Sandbox testing generated tool ${tool.name}...`, { toolName: tool.name });
-          const sandboxResult = await this.demoSandbox.run(tool.code, { query: task.description });
+          const sandboxResult = await this.demoSandbox.run(tool.code, { query: task.description }, DEMO_TOOL_TIMEOUT_MS);
           if (!sandboxResult.success) {
             throw new Error(sandboxResult.error ?? 'Fallback tool sandbox failed');
           }
@@ -110,7 +136,7 @@ export class ResearchAgent extends SelfEvolvingAgent {
 
       selectedToolName = tool.name;
       this.emitDemoStep('executing', `Executing tool ${tool.name} for the task...`, { toolName: tool.name });
-      const execution = await this.demoSandbox.run(tool.code, { query: task.description });
+      const execution = await this.demoSandbox.run(tool.code, { query: task.description }, DEMO_TOOL_TIMEOUT_MS);
       if (!execution.success) {
         throw new Error(execution.error ?? 'Tool execution failed');
       }
@@ -125,6 +151,7 @@ export class ResearchAgent extends SelfEvolvingAgent {
         executionTimeMs: Date.now() - startedAt
       };
 
+      this.applyStrategyMetadata(result, strategyDecision);
       await this.reflectAndSaveExperience(task, result, strategy);
       this.emitDemoStep('done', 'Task complete.', result);
       return result;
@@ -210,29 +237,33 @@ export class ResearchAgent extends SelfEvolvingAgent {
     return this.lastAXLTransportWasSimulated;
   }
 
-  private async findExistingTool(taskDescription: string): Promise<Tool | null> {
+  private async findAvailableTools(taskDescription: string): Promise<Tool[]> {
     const queryTerms = new Set(taskDescription.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-    const memoryMatches = Array.from(this.memoryTools.values())
-      .map((tool) => ({ tool, score: this.scoreTool(tool, queryTerms) }))
-      .filter((match) => match.score > 0)
-      .sort((a, b) => b.score - a.score || b.tool.successRate - a.tool.successRate);
+    const toolsByName = new Map<string, Tool>();
 
-    if (memoryMatches[0]?.tool && memoryMatches[0].tool.successRate > 0.5) {
-      return memoryMatches[0].tool;
+    for (const tool of this.memoryTools.values()) {
+      toolsByName.set(tool.name, tool);
     }
 
     try {
       const registryMatches = await this.demoRegistry.searchTools(taskDescription);
-      const bestMatch = registryMatches[0];
-      if (bestMatch && bestMatch.successRate > 0.5) {
-        this.memoryTools.set(bestMatch.name, bestMatch);
-        return bestMatch;
+      for (const tool of registryMatches) {
+        toolsByName.set(tool.name, tool);
+        this.memoryTools.set(tool.name, tool);
       }
     } catch {
-      return null;
+      // Demo mode can run without persistent 0G-backed registry access.
     }
 
-    return null;
+    return Array.from(toolsByName.values())
+      .map((tool) => ({ tool, score: this.scoreTool(tool, queryTerms) }))
+      .filter((match) => match.score > 0)
+      .sort((a, b) => b.score - a.score || b.tool.successRate - a.tool.successRate)
+      .map((match) => match.tool);
+  }
+
+  private findBestDemoTool(tools: Tool[]): Tool | null {
+    return tools.find((tool) => tool.successRate > 0.5) ?? null;
   }
 
   private async saveGeneratedTool(tool: Tool): Promise<void> {

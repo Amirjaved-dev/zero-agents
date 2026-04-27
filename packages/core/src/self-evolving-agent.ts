@@ -9,6 +9,7 @@ import { AgentCoordinator } from './communication/agent-coordinator.js';
 import { AXLClient } from './communication/axl-client.js';
 import { ReflectionEngine, type ReflectionResult } from './reflection/reflection-engine.js';
 import { ExperienceMemory } from './memory/experience-memory.js';
+import { StrategyAdapter, type StrategyDecision, type StrategyName } from './evolution/strategy-adapter.js';
 
 export interface SelfEvolvingAgentConfig {
   name: string;
@@ -67,12 +68,15 @@ export interface TaskResult {
   toolUsed: string;
   wasGenerated: boolean;
   executionTimeMs: number;
+  strategy?: StrategyName;
+  strategyReason?: string;
+  confidence?: number;
   reflection?: ReflectionResult;
   experienceId?: string;
 }
 
 export interface AgentStepEvent {
-  type: 'search' | 'miss' | 'generating' | 'sandboxing' | 'evaluating' | 'saving' | 'executing' | 'reflecting' | 'done' | 'error';
+  type: 'search' | 'miss' | 'strategy' | 'generating' | 'sandboxing' | 'evaluating' | 'saving' | 'executing' | 'reflecting' | 'done' | 'error';
   message: string;
   data?: any;
 }
@@ -87,6 +91,7 @@ export class SelfEvolvingAgent extends EventEmitter {
   protected readonly evolutionEngine: EvolutionEngine;
   protected readonly reflectionEngine: ReflectionEngine;
   protected readonly experienceMemory: ExperienceMemory;
+  protected readonly strategyAdapter: StrategyAdapter;
   private readonly state: AgentState;
   private readonly identity?: AgentIdentityProvider;
   private readonly axlClient: AXLClient;
@@ -130,6 +135,7 @@ export class SelfEvolvingAgent extends EventEmitter {
     this.sandbox = new ToolSandbox();
     this.reflectionEngine = new ReflectionEngine();
     this.experienceMemory = new ExperienceMemory({ filePath: config.experienceMemoryPath });
+    this.strategyAdapter = new StrategyAdapter();
     this.evolutionEngine = new EvolutionEngine(
       new ToolGenerator({ zeroGPrivateKey, openAiKey, zeroGBlockchainRpc }),
       this.sandbox,
@@ -175,24 +181,49 @@ export class SelfEvolvingAgent extends EventEmitter {
   async handleTask(task: TaskRequest): Promise<TaskResult> {
     const startedAt = Date.now();
     let selectedToolName: string | undefined;
-    let strategy = 'reuse_existing_tool';
+    let strategy: StrategyName = 'reuse_existing_tool';
+    let strategyDecision: StrategyDecision | undefined;
 
     try {
       this.emitStep({ type: 'search', message: 'Searching for existing tool...', data: { task } });
 
       const tools = await this.registry.searchTools(task.description);
-      let tool = this.findBestTool(tools);
+      this.emitStep({ type: 'strategy', message: 'Checking past experience...', data: { task } });
+      const similarExperiences = await this.experienceMemory.findSimilarExperiences(task.description);
+      strategyDecision = this.strategyAdapter.selectStrategy({
+        task: task.description,
+        agentName: this.name,
+        availableTools: tools,
+        similarExperiences
+      });
+      strategy = strategyDecision.strategy;
+      this.emitStep({ type: 'strategy', message: `Strategy selected: ${strategyDecision.strategy}`, data: strategyDecision });
+      this.emitStep({ type: 'strategy', message: `Reason: ${strategyDecision.reason}`, data: strategyDecision });
+
+      if (strategyDecision.strategy === 'reject_task') {
+        const result = this.createRejectionResult(strategyDecision, startedAt);
+        await this.reflectAndSaveExperience(task, result, strategyDecision.strategy);
+        this.emitStep({ type: 'done', message: 'Task complete.', data: result });
+        return result;
+      }
+
+      let tool = strategyDecision.strategy === 'reuse_existing_tool'
+        ? this.findSelectedTool(tools, strategyDecision) ?? this.findBestTool(tools)
+        : null;
       let wasGenerated = false;
 
-      if (!tool || tool.successRate <= 0.5) {
+      if (!tool || tool.successRate <= 0.5 || strategyDecision.strategy !== 'reuse_existing_tool') {
         this.emitStep({ type: 'miss', message: 'No tool found. Generating new tool...', data: { task } });
-        strategy = 'generate_new_tool';
+        strategy = !tool || tool.successRate <= 0.5 || strategyDecision.strategy === 'ask_another_agent'
+          ? 'generate_new_tool'
+          : strategyDecision.strategy;
         tool = await this.evolutionEngine.evolve(task.description, task.params ?? {});
         wasGenerated = true;
       }
       selectedToolName = tool.name;
 
       const result = await this.executeWithTool(tool, task, wasGenerated, startedAt);
+      this.applyStrategyMetadata(result, strategyDecision);
       await this.reflectAndSaveExperience(task, result, strategy);
 
       this.emitStep({ type: 'done', message: 'Task complete.', data: result });
@@ -235,6 +266,10 @@ export class SelfEvolvingAgent extends EventEmitter {
     return this.experienceMemory;
   }
 
+  getStrategyAdapter(): StrategyAdapter {
+    return this.strategyAdapter;
+  }
+
   getCoordinator(): AgentCoordinator | null {
     return this.coordinator ?? null;
   }
@@ -260,6 +295,40 @@ export class SelfEvolvingAgent extends EventEmitter {
       wasGenerated,
       executionTimeMs: Date.now() - startedAt
     };
+  }
+
+  protected applyStrategyMetadata(result: TaskResult, decision: StrategyDecision): void {
+    result.strategy = decision.strategy;
+    result.strategyReason = decision.reason;
+    result.confidence = decision.confidence;
+  }
+
+  protected createRejectionResult(decision: StrategyDecision, startedAt = Date.now()): TaskResult {
+    return {
+      output: {
+        rejected: true,
+        reason: decision.reason
+      },
+      toolUsed: '',
+      wasGenerated: false,
+      executionTimeMs: Date.now() - startedAt,
+      strategy: decision.strategy,
+      strategyReason: decision.reason,
+      confidence: decision.confidence
+    };
+  }
+
+  protected findSelectedTool(tools: Tool[], decision: StrategyDecision): Tool | null {
+    if (decision.selectedToolId) {
+      const byId = tools.find((tool) => tool.id === decision.selectedToolId);
+      if (byId) return byId;
+    }
+
+    if (decision.selectedToolName) {
+      return tools.find((tool) => tool.name === decision.selectedToolName) ?? null;
+    }
+
+    return null;
   }
 
   protected async reflectAndSaveExperience(task: TaskRequest, result: TaskResult, strategy: string): Promise<void> {
