@@ -58,6 +58,12 @@ export interface ToolRegistryOptions {
 
 const INDEX_POINTER_FILE = '.zero-agent-index.json';
 const DEFAULT_INDEX_CACHE_TTL_MS = 60_000;
+const MIN_TOOL_MATCH_SCORE = 0.35;
+const STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'current', 'do', 'fetch', 'for',
+  'from', 'get', 'give', 'in', 'is', 'it', 'me', 'number', 'of', 'on', 'or', 'return',
+  'show', 'summarize', 'the', 'to', 'top', 'with'
+]);
 
 export class ToolRegistry {
   private readonly indexPointerPath: string;
@@ -75,6 +81,7 @@ export class ToolRegistry {
   // One-level history (name → previousRootHash)
   private cachedHistory: Map<string, string> | null = null;
   private indexCacheExpiresAt = 0;
+  private indexWriteLock = Promise.resolve();
 
   constructor(options: string | ToolRegistryOptions = {}) {
     if (typeof options === 'string') {
@@ -92,19 +99,21 @@ export class ToolRegistry {
   }
 
   async saveTool(tool: Tool): Promise<string> {
-    const toolToUpload: Tool = { ...tool };
-    delete toolToUpload.rootHash;
+    return this.withIndexWriteLock(async () => {
+      const toolToUpload: Tool = { ...tool };
+      delete toolToUpload.rootHash;
 
-    const rootHash = await uploadToZeroG(toolToUpload, {
-      privateKey: this.zeroGPrivateKey,
-      blockchainRpc: this.zeroGBlockchainRpc,
-      indexerRpc: this.zeroGIndexerRpc
+      const rootHash = await uploadToZeroG(toolToUpload, {
+        privateKey: this.zeroGPrivateKey,
+        blockchainRpc: this.zeroGBlockchainRpc,
+        indexerRpc: this.zeroGIndexerRpc
+      });
+      tool.rootHash = rootHash;
+      this.toolCache.set(rootHash, { ...tool });
+      await this.updateIndexUnlocked(tool);
+
+      return rootHash;
     });
-    tool.rootHash = rootHash;
-    this.toolCache.set(rootHash, { ...tool });
-    await this.updateIndex(tool);
-
-    return rootHash;
   }
 
   async getTool(rootHash: string): Promise<Tool> {
@@ -173,15 +182,31 @@ export class ToolRegistry {
   }
 
   async importTool(tool: Tool): Promise<string> {
-    if (tool.rootHash) {
-      await this.updateIndex(tool);
-      return tool.rootHash;
-    }
+    return this.withIndexWriteLock(async () => {
+      if (tool.rootHash) {
+        await this.updateIndexUnlocked(tool);
+        return tool.rootHash;
+      }
 
-    return this.saveTool(tool);
+      const toolToUpload: Tool = { ...tool };
+      delete toolToUpload.rootHash;
+      const rootHash = await uploadToZeroG(toolToUpload, {
+        privateKey: this.zeroGPrivateKey,
+        blockchainRpc: this.zeroGBlockchainRpc,
+        indexerRpc: this.zeroGIndexerRpc
+      });
+      tool.rootHash = rootHash;
+      this.toolCache.set(rootHash, { ...tool });
+      await this.updateIndexUnlocked(tool);
+      return rootHash;
+    });
   }
 
   async updateIndex(tool: Tool): Promise<string> {
+    return this.withIndexWriteLock(() => this.updateIndexUnlocked(tool));
+  }
+
+  private async updateIndexUnlocked(tool: Tool): Promise<string> {
     if (!tool.rootHash) {
       throw new Error('Cannot update tool index without a rootHash');
     }
@@ -324,7 +349,7 @@ export class ToolRegistry {
       return 1;
     }
 
-    const queryTerms = new Set(normalizedQuery.match(/[a-z0-9]+/g) ?? []);
+    const queryTerms = this.extractSignalTerms(normalizedQuery);
     if (queryTerms.size === 0) return 0;
 
     let matchedTerms = 0;
@@ -334,7 +359,15 @@ export class ToolRegistry {
       }
     }
 
-    return matchedTerms / queryTerms.size;
+    const score = matchedTerms / queryTerms.size;
+    return score >= MIN_TOOL_MATCH_SCORE ? score : 0;
+  }
+
+  private extractSignalTerms(value: string): Set<string> {
+    return new Set(
+      (value.match(/[a-z0-9]+/g) ?? [])
+        .filter((term) => term.length > 2 && !STOP_WORDS.has(term))
+    );
   }
 
   private async readIndexPointer(): Promise<string | null> {
@@ -359,6 +392,19 @@ export class ToolRegistry {
   private async writeIndexPointer(rootHash: string): Promise<void> {
     const pointer: IndexPointerFile = { rootHash };
     await writeFile(this.indexPointerPath, `${JSON.stringify(pointer, null, 2)}\n`, 'utf-8');
+  }
+
+  private async withIndexWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.indexWriteLock;
+    let release!: () => void;
+    this.indexWriteLock = new Promise<void>((resolve) => { release = resolve; });
+
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   private parseTool(data: object): Tool {
