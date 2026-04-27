@@ -1,819 +1,505 @@
 # ZeroAgent
 
-**A TypeScript framework for building self-evolving AI agents with persistent tool memory, ENS identity, and peer-to-peer coordination.**
+**A memory-driven TypeScript framework for self-evolving agents.**
 
-> Agents that start with nothing, generate the tools they need, store them permanently on-chain, and reuse them across tasks and agent networks — without human intervention.
+ZeroAgent is built around a simple idea: an agent should not treat every task as new. It should remember what happened, choose a strategy from prior experience, reuse or improve tools when possible, and store what it learned for the next run.
+
+Current core loop:
+
+```text
+Task
+-> Experience Memory
+-> Strategy Adapter
+-> Tool Reuse / Generation / Improvement
+-> Execution
+-> Reflection
+-> Store Learning
+-> Adapt Future Behavior
+```
+
+This repository contains the reusable framework package, a demo research agent, and a minimal Next.js dashboard package.
 
 ---
 
-## The Problem
+## What is ZeroAgent?
 
-Every AI agent framework today ships agents with a fixed toolbox. If the task doesn't fit an existing tool, the agent fails, hallucinates, or asks for help. The only way to add capabilities is for a developer to write more code and redeploy.
+ZeroAgent is a TypeScript framework for building agents that can change their own capability surface at runtime.
 
-This creates a ceiling: agents are only as capable as what was pre-built for them. They don't learn. They don't grow. They can't share what they discover.
+A `SelfEvolvingAgent` can:
 
-There are three deeper problems:
+- search for an existing tool
+- inspect similar past task experiences
+- select a task strategy before acting
+- generate a new tool when no useful tool exists
+- execute tools in a sandbox
+- reflect on the result
+- save a structured experience record
+- attempt a lightweight tool improvement when an existing tool fails
+- publish agent identity data through ENS
+- communicate with other agents through Gensyn AXL when a local AXL node is available
 
-**No persistent memory across deployments.** Tools generated at runtime vanish on restart. If an agent figures out how to call an API, that knowledge dies with the process.
-
-**No portable identity.** Agents have no standard way to advertise capabilities, find each other, or establish provenance for the tools they share. They're anonymous and invisible to each other.
-
-**No coordination layer.** Multi-agent systems require custom protocols. There's no standard for agent-to-agent task delegation, tool sharing, or capability discovery across network boundaries.
-
-ZeroAgent addresses all three.
-
----
-
-## What ZeroAgent Is
-
-ZeroAgent is a framework — a set of composable primitives — for building agents that solve the three problems above.
-
-At runtime, a ZeroAgent-powered agent:
-
-1. Receives a task
-2. Searches its tool registry for a matching tool
-3. If none found: generates one using an LLM (0G Compute or OpenAI)
-4. Runs the generated code in an isolated sandbox
-5. Evaluates it against LLM-generated test cases (threshold: 0.7)
-6. If it passes: stores it permanently on 0G Storage with a root hash
-7. Executes the task with the new tool
-8. On the next identical task: retrieves and reuses the stored tool — no generation required
-
-The framework also handles:
-- **ENS-backed agent identity** — each agent publishes its capabilities, tool registry hash, and AXL peer ID as ENS text records on Sepolia
-- **Gensyn AXL peer-to-peer messaging** — agents send tasks and share tool libraries over the AXL P2P network
-- **Cross-agent tool import** — agents can pull another agent's entire tool library by ENS name
-
-This is not a single agent application. It's the infrastructure layer beneath agent applications.
+ZeroAgent is not a hosted agent service and it is not a single demo bot. The main artifact is `@zero-agents/core`, a framework package intended to be embedded in other agent applications.
 
 ---
 
-## Demo
+## Why static agents fail
 
-> Video walkthrough: *(link to demo video — add before submission)*
+Most agents ship with a fixed set of tools. That works until the task does not fit the tool list.
 
-The demo runs a 12-step sequence showing an agent bootstrapping from zero tools to a working, reusable capability:
+Then the agent usually does one of three things:
 
-```
-Step 1:  research-agent.eth created — empty tool library
-Step 2:  Task arrives: "summarize trending AI agent news"
-Step 3:  Registry search → MISS (no tools exist)
-Step 4:  Tool generated: web_search_and_summarize
-Step 5:  Sandbox test: code runs in isolated-vm
-Step 6:  Evaluation: LLM test cases run, score >= 0.7
-Step 7:  Tool saved → 0G Storage root hash recorded
-Step 8:  Task executed → result returned (wasGenerated: true)
+- fails outright
+- hallucinates an answer without the right capability
+- asks a developer to add another tool and redeploy
 
-Step 9:  Same task arrives again
-Step 10: Registry search → HIT (tool cached)
-         Tool reused (wasGenerated: false) ← proof of learning
+That model does not compound. A static agent can have memory of conversations, but not memory of operational experience: which strategy worked, which tool failed, what should be reused, and what should be improved.
 
-Step 11: planner-agent.eth created
-         Imports tool library from research-agent.eth
+ZeroAgent separates tool memory from experience memory. Tools are executable capabilities. Experiences are structured records of what happened when the agent tried to solve a task. The strategy layer uses both.
 
-Step 12: planner-agent.eth delegates task to research-agent.eth over AXL
-         research-agent.eth executes and returns result
-```
+---
 
-Run it:
+## Self-evolving loop
 
-```bash
-cd packages/demo-agent
-pnpm demo
-```
+The implemented base agent flow is:
+
+1. Receive a `TaskRequest` through `handleTask()` or `run()`.
+2. Search `ToolRegistry` for candidate tools.
+3. Search `ExperienceMemory` for similar prior tasks.
+4. Call `StrategyAdapter.selectStrategy()`.
+5. Act on the selected strategy:
+   - `reuse_existing_tool`: prefer the selected existing tool.
+   - `generate_new_tool`: use the existing `EvolutionEngine` generation path.
+   - `improve_existing_tool`: currently falls back to generation before execution; failed existing tools can trigger `ToolImprover`.
+   - `ask_another_agent`: currently falls back to generation if no AXL delegation path is available in that run.
+   - `reject_task`: return a structured rejection result.
+6. Execute the selected or generated tool.
+7. If an existing tool fails, attempt a lightweight improvement path.
+8. Reflect on the result with `ReflectionEngine`.
+9. Save an `ExperienceRecord` locally through `ExperienceMemory`.
+10. Return output plus metadata: strategy, confidence, reflection, experience ID, and whether improvement happened.
+
+Normal reuse/generation behavior remains intact. The memory and strategy layers guide the flow but do not require every task to go through improvement.
 
 ---
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│              Application Layer                               │
-│   Your Agent (extends SelfEvolvingAgent)                     │
-└───────────────────────┬──────────────────────────────────────┘
-                        │
-┌───────────────────────▼──────────────────────────────────────┐
-│              SelfEvolvingAgent                               │
-│  handleTask() → search → generate → sandbox → eval → store  │
-│  publishProfile() → ENS text records                        │
-│  collaborateWith() → AXL task delegation                    │
-└──────┬──────────────────────────┬────────────────────────────┘
-       │                          │
-┌──────▼────────┐      ┌──────────▼──────────────────────────┐
-│ Evolution     │      │ Communication                       │
-│ Engine        │      │ AXLClient + AgentCoordinator        │
-│               │      │ - Peer discovery (GET /topology)    │
-│ ToolGenerator │      │ - Task routing (POST /send)         │
-│ ToolSandbox   │      │ - Tool sharing (GET /recv polling)  │
-│ ToolEvaluator │      └────────────────────────────────────┘
-└──────┬────────┘
-       │
-┌──────▼────────────────────────────────────┐
-│ Storage & Identity                        │
-│                                           │
-│ ToolRegistry ──→ 0G Storage               │
-│   .zero-agent-index.json (local pointer)  │
-│   Tool files (0G, addressed by root hash) │
-│   Tool index (0G, addressed by root hash) │
-│                                           │
-│ ENSIdentityManager ──→ Sepolia ENS        │
-│   description                             │
-│   capabilities (JSON array)               │
-│   zeroagent.toolRegistry (0G root hash)   │
-│   zeroagent.axlPeerId                     │
-│   url                                     │
-└───────────────────────────────────────────┘
+```text
+packages/core
+  SelfEvolvingAgent
+    |-- ToolRegistry          0G-backed tool index and tool storage
+    |-- ExperienceMemory      local JSON task experience memory
+    |-- StrategyAdapter       deterministic pre-task strategy selection
+    |-- EvolutionEngine       generate -> sandbox -> evaluate -> save
+    |-- ToolImprover          improve failed existing tools
+    |-- ToolSandbox           isolated-vm with Node vm fallback
+    |-- ToolEvaluator         sandbox-based scoring, optional OpenAI test cases
+    |-- ReflectionEngine      deterministic post-task learning data
+    |-- ENSIdentityManager    ENS text record identity
+    |-- AXLClient             local Gensyn AXL HTTP client
+    |-- AgentCoordinator      AXL message routing and tool sharing
 ```
 
-### Data flow
+The base `SelfEvolvingAgent` is the reference composition. Most modules are exported independently so framework users can replace or call them directly.
 
-```
-Task
- │
- ├─▶ ToolRegistry.searchTools()
- │       │
- │       ├─ HIT ──────────────────────────────────────▶ Execute
- │       │
- │       └─ MISS
- │               │
- │               ▼
- │         ToolGenerator.generateTool()
- │         (0G Compute broker → OpenAI fallback)
- │               │
- │               ▼
- │         ToolSandbox.run()  [syntax + runtime check]
- │               │
- │               ▼
- │         ToolEvaluator.evaluate()
- │         (LLM generates test cases → score threshold 0.7)
- │               │
- │               ├─ FAIL (retry ×3 with feedback)
- │               │
- │               └─ PASS
- │                       │
- │                       ▼
- │                 ToolRegistry.saveTool()
- │                 → uploadToZeroG() → root hash
- │                       │
- │                       ▼
- └──────────────────▶ Execute → TaskResult
+---
+
+## ReflectionEngine
+
+`ReflectionEngine` turns a completed or failed task attempt into structured learning data.
+
+It is deterministic and does not call an external API.
+
+Output includes:
+
+- `success`
+- `qualityScore` from `0` to `100`
+- `whatWorked`
+- `whatFailed`
+- `improvementNeeded`
+- `memoryNote`
+- `recommendedStrategy`
+
+Rules implemented today:
+
+- result with no error means success
+- any error means failure
+- failed runs require improvement
+- quality scoring is simple and deterministic
+
+`SelfEvolvingAgent` uses this after task execution and also records failed runs before rethrowing or returning a graceful tool error.
+
+---
+
+## ExperienceMemory
+
+`ExperienceMemory` stores task experiences separately from tools.
+
+An `ExperienceRecord` includes:
+
+- `id`
+- `agentName`
+- `task`
+- `strategy`
+- `toolUsed`
+- `resultSummary`
+- `success`
+- `qualityScore`
+- `reflection`
+- `createdAt`
+- `storageHash`
+- `metadata`
+
+Default persistence is a local JSON file, `.zero-agent-experiences.json`. That is intentional: the demo and local development should work without a funded wallet or live storage network.
+
+Optional best-effort 0G upload support exists in the module, but the integrated agent path uses local JSON by default. Tool registry state is not mutated by experience memory.
+
+Public methods:
+
+```ts
+saveExperience(experience)
+listExperiences(agentName?)
+findSimilarExperiences(task, limit?)
+clearExperiences()
 ```
 
 ---
 
-## Core Features
+## StrategyAdapter
 
-### Self-evolution loop
+`StrategyAdapter` chooses a pre-task strategy from available tools and similar experiences.
 
-The `EvolutionEngine` orchestrates tool creation with a retry loop. On failure, it feeds the sandbox error and eval score back to the generator. Up to 3 attempts per task, each with improved context.
+It is deterministic and does not call external APIs.
 
-### Isolated code execution
+Strategies:
 
-Generated tools run in [`isolated-vm`](https://github.com/laverdet/isolated-vm) with a 16MB memory cap and 3-second timeout when the native module is available. Tools that require `fetch`, or environments where `isolated-vm` cannot load, use a restricted Node.js `vm.createContext()` fallback with `fetch` explicitly allowed.
+- `reuse_existing_tool`
+- `generate_new_tool`
+- `improve_existing_tool`
+- `ask_another_agent`
+- `reject_task`
 
-The Node `vm` fallback is a developer-convenience mode, not a hard security boundary for hostile code. Production deployments that execute untrusted generated tools should run ZeroAgent in a separate locked-down worker/container or disable network-capable tool execution until a stronger sandbox is configured.
+Current behavior:
 
-### LLM-driven test generation
+- high-quality successful similar experience with a tool prefers reuse
+- failed similar experience with the same tool prefers improvement
+- no useful tool or experience prefers generation
+- the base agent falls back safely when a selected strategy cannot be completed directly
 
-`ToolEvaluator` calls `gpt-4o-mini` to generate 2 test cases for each tool before running them. It doesn't assume the tool is correct — it independently assesses whether the output is reasonable. Score < 0.7 triggers a regeneration cycle.
+`TaskResult` includes:
 
-### Persistent tool storage on 0G
-
-Every approved tool is serialized to JSON and uploaded to 0G Storage on Sepolia testnet via `@0gfoundation/0g-ts-sdk`. The returned root hash is stored in a local index file (`.zero-agent-index.json`). On the next run, the agent fetches the tool from 0G by root hash. Tools survive process restarts.
-
-### ENS as agent identity
-
-`ENSIdentityManager` uses [viem](https://viem.sh/) to read and write ENS text records on Sepolia. Each agent owns an ENS name and stores its capabilities, tool registry hash, and AXL peer ID directly in those records. Other agents can discover it by resolving the ENS name.
-
-### Gensyn AXL peer-to-peer messaging
-
-`AXLClient` implements the official [Gensyn AXL](https://github.com/gensyn-ai/axl) HTTP API:
-- `GET /topology` — get this node's stable peer ID
-- `POST /send` with `X-Destination-Peer-Id` — send message to a peer
-- `GET /recv` — poll for incoming messages (500ms interval)
-
-`AgentCoordinator` routes incoming messages to the agent: `task_request` triggers `handleTask()`, `tool_share` triggers `registry.importTool()`.
-
-### Pluggable identity provider
-
-The `AgentIdentityProvider` interface decouples identity from ENS. Swap in any implementation — database-backed, mock for tests, or a different naming system — without touching agent logic.
+```ts
+strategy?: StrategyName
+strategyReason?: string
+confidence?: number
+```
 
 ---
 
-## Sponsor Integration
+## ToolImprover
+
+`ToolImprover` creates an improved tool candidate from an existing failed tool.
+
+It uses an injected `ToolGenerator`-compatible object. If no generator is configured, it throws a clear configuration error. The module does not save or evaluate by itself.
+
+The base `SelfEvolvingAgent` now uses it lightly:
+
+1. An existing tool fails during execution.
+2. The agent logs `Improvement needed...`.
+3. The agent calls `ToolImprover.improveTool()`.
+4. The improved candidate is evaluated with `ToolEvaluator` and `ToolSandbox`.
+5. If evaluation passes, the improved version is saved through `ToolRegistry`.
+6. The improved tool is executed.
+7. The result includes `wasImproved: true`.
+
+If improvement generation, evaluation, saving, or execution fails, the agent keeps the original tool and returns a graceful structured error for that run. It does not silently replace tools with untested code.
+
+The demo `ResearchAgent` has its own override for the showcase flow. The base framework improvement path is implemented in `SelfEvolvingAgent`.
+
+---
+
+## 0G integration
+
+ZeroAgent uses 0G in two places.
 
 ### 0G Storage
 
-ZeroAgent uses 0G Storage as the persistence layer for every generated tool and tool index.
+`ToolRegistry` stores generated and improved tools as JSON blobs through `@0gfoundation/0g-ts-sdk`.
 
-| Operation | Implementation |
-|---|---|
-| Tool upload | `uploadToZeroG(tool)` → `Indexer.uploadFile()` → root hash |
-| Tool download | `downloadFromZeroG(rootHash)` → `Indexer.downloadFile()` → parsed JSON |
-| Index storage | Tool registry index uploaded as JSON blob |
-| Cross-agent sharing | Agent B fetches tools from 0G by root hashes published in Agent A's ENS records |
+Implemented storage behavior:
 
-Network: Sepolia testnet
-- EVM RPC: `https://evmrpc-testnet.0g.ai`
-- Indexer: `https://indexer-storage-testnet-turbo.0g.ai`
+- `saveTool(tool)` uploads the tool to 0G and updates a tool index
+- `getTool(rootHash)` downloads a tool by root hash
+- `searchTools(query)` searches cached index metadata and downloads matches
+- `.zero-agent-index.json` stores the current index root hash pointer
 
-Without 0G, ZeroAgent has no persistence. Tool memory is the core product. 0G is the database.
+Default testnet endpoints:
+
+```text
+0G EVM RPC: https://evmrpc-testnet.0g.ai
+0G Indexer: https://indexer-storage-testnet-turbo.0g.ai
+```
+
+The demo agent has an offline storage fallback that creates deterministic `offline-0g-...` hashes when no `ZERO_G_PRIVATE_KEY` is present. That fallback is for local demo reliability; it is not real 0G persistence.
 
 ### 0G Compute
 
-`ToolGenerator` calls the 0G Compute broker as its first LLM source. It uses `@0glabs/0g-serving-broker` to list available services, locate a "chatbot" provider, and call `/chat/completions` with custom headers for billing. OpenAI `gpt-4o-mini` is the fallback if 0G Compute is unavailable or returns no providers.
+`ToolGenerator` first attempts to use `@0glabs/0g-serving-broker` to locate an available chatbot provider and call its OpenAI-compatible `/chat/completions` endpoint.
 
-### ENS
+If 0G Compute is unavailable and `OPENAI_API_KEY` is configured, it falls back to OpenAI `gpt-4o-mini`.
 
-Each agent is an ENS name. `ENSIdentityManager` writes to Sepolia's Public Resolver (`0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5`) using viem's `writeContract`. The text records it writes:
+If neither is configured, base framework tool generation cannot generate new tools. The demo agent has a built-in offline fallback tool for the showcase only.
 
-| Record | Value |
+---
+
+## ENS identity
+
+`ENSIdentityManager` implements agent identity through ENS text records on Sepolia.
+
+It can read and write:
+
+| Text record | Purpose |
 |---|---|
-| `description` | Agent description |
-| `capabilities` | JSON-encoded string array |
-| `zeroagent.toolRegistry` | 0G root hash of tool index |
+| `description` | Human-readable agent description |
+| `capabilities` | JSON array of capabilities |
+| `zeroagent.toolRegistry` | 0G root hash for the agent's tool index |
 | `zeroagent.axlPeerId` | Gensyn AXL peer ID |
-| `url` | Agent repository or endpoint |
+| `url` | Project or service URL |
 
-Agents can discover each other with `discoverAgentsByCapability(capability, knownAgentNames[])` — it resolves each name's text records and filters by capability match.
+ENS is optional at runtime. `SelfEvolvingAgent` accepts any `AgentIdentityProvider`, so tests and demos can use an in-memory provider.
 
-ENS is not cosmetic here. It's the agent's public identity card, the pointer to its tool library, and the address book for the agent network.
+ENS writes require a wallet that controls the ENS name and has Sepolia ETH for gas.
 
-### Gensyn AXL
+---
 
-ZeroAgent uses AXL as the transport for agent-to-agent task delegation and tool library sharing.
+## Gensyn AXL communication
 
-| Message type | Behavior |
-|---|---|
-| `task_request` | Routed to `agent.handleTask()`, response sent back as `task_result` |
-| `tool_share` | Tool object extracted and saved via `registry.importTool()` |
-| `ping` | Acknowledged (keepalive) |
+ZeroAgent includes a local HTTP client for Gensyn AXL.
 
-The `AgentCoordinator` handles deduplication, timeout (30s per task), and error isolation. AXL peer IDs are published in ENS, so any agent can discover another agent's AXL address by ENS name lookup.
+Implemented pieces:
+
+- `AXLClient` talks to a local AXL HTTP API, default port `9002`
+- `AgentCoordinator` polls for messages and routes task requests to `handleTask()`
+- supported message types: `task_request`, `task_result`, `tool_share`, `ping`
+- `collaborateWith(ensName, task)` resolves a peer ID through the configured identity provider and sends a task
+
+AXL must be running locally for real P2P transport. The demo falls back to direct in-process simulation when AXL is unavailable, and it labels that mode explicitly.
 
 ---
 
 ## Installation
 
-### Prerequisites
+Requirements:
 
 - Node.js 20+
-- pnpm 8+
-- A funded Ethereum wallet on Sepolia only when using 0G Storage or ENS writes
+- pnpm
+- a funded wallet only for live 0G Storage or ENS writes
+
+Clone and build:
 
 ```bash
-git clone https://github.com/your-org/zero-agents
+git clone https://github.com/Amirjaved-dev/zero-agents.git
 cd zero-agents
 pnpm install
-```
-
-Copy `.env.example` to `.env` and fill in the required keys:
-
-```bash
-cp .env.example .env
-```
-
-Build all packages:
-
-```bash
 pnpm build
 ```
 
-For package consumers, the framework is already published:
+Package consumers can install the core package when published:
 
 ```bash
 npm install @zero-agents/core
 ```
 
-### Windows and Native Dependency Notes
-
-`@zero-agents/core` depends on `isolated-vm`, a native Node.js module. Use Node.js 20 because it matches the package `engines` field and has the best prebuilt binary support for the current release.
-
-If installation falls back to a native build on Windows and fails with `node-gyp`, `MSBuild`, or C++ compiler errors, install Visual Studio Build Tools 2022 with the "Desktop development with C++" workload, then retry `npm install @zero-agents/core`.
-
-If `isolated-vm` cannot load at runtime, ZeroAgent falls back to Node's `vm` sandbox for supported tool execution. That fallback is useful for local development, but production deployments should run untrusted generated tools inside a locked-down worker or container.
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `ZERO_G_PRIVATE_KEY` | Required for 0G | Ethereum private key for 0G storage operations |
-| `ENS_PRIVATE_KEY` | Optional | Ethereum private key controlling your agent's ENS name |
-| `ENS_NAME` | Optional | ENS name your agent will use (e.g. `my-agent.eth`) |
-| `OPENAI_API_KEY` | Optional | Fallback LLM if 0G Compute has no available providers |
-| `SEPOLIA_RPC_URL` | Optional | Custom Sepolia RPC. Defaults to `https://sepolia.drpc.org` |
-
-The zero-wallet smoke test does not require any environment variables. The minimum setup for persistent agent evolution is `ZERO_G_PRIVATE_KEY`. ENS writes require a wallet that controls the target `.eth` name. `OPENAI_API_KEY` enables tool generation if 0G Compute is unavailable.
+Native dependency note: `isolated-vm` is used when available. If it cannot load, `ToolSandbox` falls back to Node's `vm` module. The fallback is useful for development but should not be treated as a strong security boundary for hostile code.
 
 ---
 
 ## Quickstart
 
-### Zero-wallet local smoke test
-
-Use this first if you just want to verify the framework installed correctly. It does not call 0G, ENS, AXL, or any LLM.
-
-```typescript
-import { ToolSandbox } from '@zero-agents/core';
-
-const sandbox = new ToolSandbox();
-const result = await sandbox.run(
-  `async function execute(params) {
-    return { sum: params.a + params.b };
-  }`,
-  { a: 2, b: 3 }
-);
-
-console.log(result.output);
-// { sum: 5 }
-```
-
-### Full agent with 0G/ENS
-
-```typescript
-import { SelfEvolvingAgent, ENSIdentityManager } from '@zero-agents/core';
-
-const identity = new ENSIdentityManager({
-  ensName: 'my-agent.eth',
-  privateKey: process.env.ENS_PRIVATE_KEY!,
-});
+```ts
+import { SelfEvolvingAgent } from '@zero-agents/core';
 
 const agent = new SelfEvolvingAgent({
-  name: 'my-agent.eth',
-  description: 'A research agent',
-  capabilities: ['web-search', 'summarization'],
+  name: 'research-agent',
+  description: 'Research agent that learns from task experience',
+  capabilities: ['research', 'summarization'],
   zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
   openAiKey: process.env.OPENAI_API_KEY,
-  identity,
   axlEnabled: false,
 });
 
-// Subscribe to step events
 agent.on('step', (event) => {
   console.log(`[${event.type}] ${event.message}`);
 });
 
-// Publish ENS profile
-await agent.publishProfile();
-
-// Run a task
-const result = await agent.handleTask({
-  description: 'Find and summarize the top 3 AI research papers from this week',
+const result = await agent.run({
+  description: 'Fetch the current ETH price and return it as a number',
 });
 
 console.log(result.output);
-console.log(`Tool used: ${result.toolUsed}`);
-console.log(`Generated: ${result.wasGenerated}`);  // true on first run, false after
+console.log(result.strategy);
+console.log(result.reflection?.memoryNote);
+console.log(result.experienceId);
 ```
 
-On the first call, the agent generates a tool and stores it on 0G. On every subsequent call with a matching task, it retrieves and reuses the stored tool.
+Expected metadata on a successful run:
 
----
-
-## Building Your Own Agent
-
-Extend `SelfEvolvingAgent` and implement `handleTask`:
-
-```typescript
-import { SelfEvolvingAgent, TaskRequest, TaskResult } from '@zero-agents/core';
-
-export class MyAgent extends SelfEvolvingAgent {
-  constructor(options: MyAgentOptions) {
-    super({
-      name: options.name,
-      description: 'My custom agent',
-      capabilities: ['my-capability'],
-      zeroGPrivateKey: options.zeroGKey,
-      identity: options.identity,
-      axlEnabled: false,
-    });
-  }
-
-  async handleTask(task: TaskRequest): Promise<TaskResult> {
-    // Check registry for an existing tool
-    const existing = await this.getRegistry().searchTools(task.description);
-    if (existing.length > 0) {
-      return this.executeWithTool(existing[0], task);
-    }
-
-    // Generate a new tool via the evolution engine
-    const tool = await this.getEvolutionEngine().evolve(
-      task.description,
-      { query: task.description }
-    );
-
-    return this.executeWithTool(tool, task);
-  }
-}
+```ts
+result.strategy        // selected strategy
+result.strategyReason  // why that strategy was selected
+result.confidence      // 0 to 1
+result.reflection      // structured learning data
+result.experienceId    // local experience record id
+result.wasGenerated    // true if a new tool was generated
+result.wasImproved     // true if a failed existing tool was improved and used
 ```
 
-The base class handles tool generation, sandboxing, evaluation, storage, and execution helpers. You control when and how they're invoked.
-
----
-
-## Agent-to-Agent Coordination
-
-```typescript
-// Discover another agent by ENS name
-const peerId = await identity.getAXLPeerIdForName('research-agent.eth');
-
-// Delegate a task to it over AXL
-const result = await agent.collaborateWith('research-agent.eth', {
-  description: 'Summarize the latest Ethereum news',
-});
-
-// Share your entire tool library with another agent
-const coordinator = agent.getCoordinator();
-if (!coordinator) throw new Error('AXL coordinator is not available');
-await coordinator.shareToolLibrary(peerId);
-```
-
-The receiving agent automatically imports shared tools into its registry. From that point, it can execute those tasks without generation.
-
----
-
-## Demo Agent: ResearchAgent
-
-`packages/demo-agent` contains `ResearchAgent`, a concrete implementation that demonstrates the full framework lifecycle:
-
-- Extends `SelfEvolvingAgent`
-- Generates `web_search_and_summarize` on first run (fetches Hacker News API, formats results)
-- Caches the tool in 0G storage with root hash tracking
-- Supports offline fallback (runs without `ZERO_G_PRIVATE_KEY` for local testing)
-- Cross-agent tool import via `importToolsFrom(otherAgent)`
-- AXL task simulation via `sendTaskOverAXL(agent, task)`
-
-Run the 12-step demo:
+For local checks that do not require 0G or LLM credentials:
 
 ```bash
-cd packages/demo-agent
-pnpm demo
-```
-
-Expected output:
-
-```
-[research-agent.eth] Profile published to ENS
-[search] Searching registry for: summarize trending AI agents...
-[miss] No tool found — starting evolution
-[generate] Generating tool: web_search_and_summarize
-[sandbox] Sandbox test passed
-[eval] Score: 0.85 — PASS
-[store] Saved to 0G: 0x8ec79d696b5cc362a...
-[execute] Task complete (wasGenerated: true, 1243ms)
-
-[search] Searching registry for: summarize trending AI agents...
-[hit] Tool found: web_search_and_summarize
-[execute] Task complete (wasGenerated: false, 312ms)
-
-[planner-agent.eth] Imported 1 tool from research-agent.eth
-[axl] Task delegated to research-agent.eth via AXL
-[axl] Response received
+pnpm test:evolution
 ```
 
 ---
 
-## Package Structure
+## Example agent
 
+The demo package contains `ResearchAgent`, a concrete agent used for the project demo.
+
+It demonstrates:
+
+- first-run tool creation through an offline fallback when no keys are configured
+- sandbox testing and evaluation
+- offline demo storage when no `ZERO_G_PRIVATE_KEY` exists
+- experience memory and strategy selection
+- reflection records in returned results
+- simulated AXL fallback when no local AXL node is running
+
+Run it:
+
+```bash
+pnpm --filter @zero-agents/demo-agent demo
 ```
+
+Expected behavior:
+
+- first run selects `generate_new_tool`
+- second run selects `reuse_existing_tool`
+- returned results include strategy metadata, reflection, and experience IDs
+- AXL transport is real only if a local AXL node and peer identity are available; otherwise the demo uses simulation
+
+---
+
+## Environment variables
+
+| Variable | Required | Used by |
+|---|---|---|
+| `ZERO_G_PRIVATE_KEY` | Required for live 0G Storage and 0G Compute | `ToolRegistry`, `ToolGenerator` |
+| `OPENAI_API_KEY` | Optional fallback | `ToolGenerator`, `ToolEvaluator` test generation |
+| `ENS_PRIVATE_KEY` | Required for ENS writes | `ENSIdentityManager`, demo real ENS mode |
+| `ENS_NAME` | Optional | demo real ENS mode |
+| `SEPOLIA_RPC_URL` | Optional | ENS manager custom RPC |
+| `NEXT_PUBLIC_APP_URL` | Optional | demo identity URL text record |
+
+Without `ZERO_G_PRIVATE_KEY`, the base framework cannot persist tools to 0G. The demo still runs through an offline storage path so reviewers can see the full control flow locally.
+
+---
+
+## Package structure
+
+```text
 zero-agents/
-├── packages/
-│   ├── core/                         # @zero-agents/core
-│   │   └── src/
-│   │       ├── index.ts              # All exports
-│   │       ├── self-evolving-agent.ts
-│   │       ├── evolution-engine.ts
-│   │       ├── generation/
-│   │       │   └── tool-generator.ts # 0G Compute + OpenAI fallback
-│   │       ├── sandbox/
-│   │       │   ├── tool-sandbox.ts   # isolated-vm execution
-│   │       │   └── tool-evaluator.ts # LLM test generation + scoring
-│   │       ├── storage/
-│   │       │   ├── zero-g.ts         # 0G upload/download
-│   │       │   └── tool-registry.ts  # Index management
-│   │       ├── identity/
-│   │       │   ├── ens-identity-manager.ts
-│   │       │   ├── types.ts
-│   │       │   └── index.ts
-│   │       └── communication/
-│   │           ├── axl-client.ts     # AXL HTTP API client
-│   │           └── agent-coordinator.ts
-│   │
-│   ├── demo-agent/                   # @zero-agents/demo-agent
-│   │   ├── src/index.ts              # ResearchAgent class
-│   │   └── scripts/run-demo.ts       # 12-step demo
-│   │
-│   └── dashboard/                    # @zero-agents/dashboard
-│       └── src/app/                  # Next.js (UI in progress)
-│
-├── scripts/
-│   ├── test-storage.ts               # 0G integration test
-│   ├── test-agent.ts                 # Agent + evolution test
-│   ├── test-ens-identity.ts          # ENS read/write tests (8 cases)
-│   └── test-axl-local.ps1            # Local AXL P2P integration test
-│
-├── .zero-agent-index.json            # Pointer to current 0G tool index
-├── .env.example
-├── pnpm-workspace.yaml
-└── tsconfig.json
+  packages/
+    core/
+      src/
+        self-evolving-agent.ts
+        evolution-engine.ts
+        evolution/strategy-adapter.ts
+        reflection/reflection-engine.ts
+        memory/experience-memory.ts
+        tools/tool-improver.ts
+        generation/tool-generator.ts
+        sandbox/tool-sandbox.ts
+        sandbox/tool-evaluator.ts
+        storage/tool-registry.ts
+        storage/zero-g.ts
+        identity/ens-identity-manager.ts
+        communication/axl-client.ts
+        communication/agent-coordinator.ts
+    demo-agent/
+      src/index.ts
+      scripts/run-demo.ts
+    dashboard/
+      src/app/
+  scripts/
+    test-evolution-modules.ts
+    test-agent.ts
+    test-storage.ts
+    test-ens-identity.ts
 ```
 
----
-
-## Development Commands
+Root commands:
 
 ```bash
-# Build all packages
 pnpm build
-
-# Watch mode (all packages)
-pnpm dev
-
-# Run the 12-step demo
-cd packages/demo-agent && pnpm demo
-
-# Test 0G upload/download (requires ZERO_G_PRIVATE_KEY)
-pnpm test:storage
-
-# Test agent + tool evolution (requires ZERO_G_PRIVATE_KEY)
-pnpm test:agent
-
-# Test ENS identity (reads from Sepolia, writes require ENS_PRIVATE_KEY + ENS_NAME)
-tsx scripts/test-ens-identity.ts
-
-# Test AXL local P2P integration (Windows, clones official AXL repo and builds it)
-powershell -ExecutionPolicy Bypass -File scripts/test-axl-local.ps1
-
-# Keep AXL nodes running after test
-powershell -ExecutionPolicy Bypass -File scripts/test-axl-local.ps1 -KeepRunning
+pnpm test:evolution
+pnpm test:unit
+pnpm test:agent      # live 0G path when credentials are present
+pnpm test:storage    # live 0G upload/download
 ```
 
 ---
 
-## Integration Tests
+## Sponsor alignment
 
-| Test | What it verifies | Requirement |
-|---|---|---|
-| `test-storage.ts` | Upload JSON to 0G, download by root hash, verify data integrity | `ZERO_G_PRIVATE_KEY` |
-| `test-agent.ts` | Full evolution loop: generate tool, sandbox, eval, save; second run reuses tool | `ZERO_G_PRIVATE_KEY` |
-| `test-ens-identity.ts` | 8 read tests (resolve address, get capabilities, get registry hash, get AXL peer ID, error handling); 3 write tests | Write tests require `ENS_PRIVATE_KEY` + `ENS_NAME` |
-| `test-axl-local.ps1` | Clones official AXL repo, builds `node.exe`, starts 2 peered nodes, sends messages both directions | Windows + internet access |
+### 0G
 
-Long-running apps can call `agent.dispose()` during shutdown to stop AXL polling and cancel pending requests.
+0G Storage is the live persistence layer for generated and improved tools. 0G Compute is the first attempted LLM provider for tool generation before OpenAI fallback.
 
----
+### ENS
 
-## 0G Network Configuration
+ENS provides public agent identity: description, capabilities, tool registry pointer, AXL peer ID, and URL.
 
-```
-Blockchain RPC:   https://evmrpc-testnet.0g.ai
-Indexer:          https://indexer-storage-testnet-turbo.0g.ai
-```
+### Gensyn AXL
 
-Tool index pointer is stored in `.zero-agent-index.json`:
+AXL is the P2P transport layer for task delegation and tool sharing when a local AXL node is running.
 
-```json
-{
-  "rootHash": "0x8ec79d696b5cc362a48429b059528833a2dd129878451ebb2185a2bd12c7f9f2"
-}
-```
-
-This hash points to the current tool index on 0G. When an agent is restarted, it reads this file and re-fetches its entire tool library from 0G by hash.
+The implementation does not claim these networks are always available. The framework has explicit local/demo fallbacks where needed, and those fallbacks are labeled.
 
 ---
 
-## ENS Configuration
+## Known limitations
 
-Network: Sepolia testnet
-Public Resolver: `0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5`
-
-Text records ZeroAgent writes:
-
-| Key | Purpose |
-|---|---|
-| `description` | Human-readable agent description |
-| `capabilities` | JSON array of capability strings |
-| `zeroagent.toolRegistry` | 0G root hash of this agent's tool index |
-| `zeroagent.axlPeerId` | This agent's Gensyn AXL peer ID |
-| `url` | Agent repository or API endpoint |
-
----
-
-## AXL Node Configuration
-
-Local AXL HTTP API (default: `http://localhost:9002`):
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/topology` | GET | Returns `{ our_public_key }` — this node's peer ID |
-| `/send` | POST | Sends raw bytes with `X-Destination-Peer-Id` header |
-| `/recv` | GET | Polls for incoming messages with `X-From-Peer-Id` header |
-
-Message format:
-
-```typescript
-{
-  type: 'task_request' | 'task_result' | 'tool_share' | 'ping',
-  requestId: string,
-  payload: unknown,
-  fromAgent?: string,
-  timestamp: number
-}
-```
-
----
-
-## API Reference
-
-### `SelfEvolvingAgent`
-
-```typescript
-class SelfEvolvingAgent extends EventEmitter {
-  constructor(config: SelfEvolvingAgentConfig)
-
-  handleTask(task: TaskRequest): Promise<TaskResult>
-  publishProfile(toolRegistryHash?: string): Promise<void>
-  collaborateWith(ensName: string, task: TaskRequest): Promise<TaskResult>
-  evolve(): void
-
-  on('step', (event: AgentStepEvent) => void): this
-}
-```
-
-### `EvolutionEngine`
-
-```typescript
-class EvolutionEngine {
-  constructor(generator, sandbox, evaluator, registry)
-
-  evolve(taskDescription: string, sampleParams: object): Promise<Tool>
-  generateTool(taskDescription: string, sampleParams: object): Promise<Tool>
-}
-```
-
-### `ToolRegistry`
-
-```typescript
-class ToolRegistry {
-  saveTool(tool: Tool): Promise<string>         // returns root hash
-  getTool(rootHash: string): Promise<Tool>
-  getToolByName(name: string): Promise<Tool | null>
-  searchTools(query: string): Promise<Tool[]>
-  importTool(tool: Tool): Promise<void>
-  exportTools(): Tool[]
-  getIndexRootHash(): Promise<string>
-}
-```
-
-### `ENSIdentityManager`
-
-```typescript
-class ENSIdentityManager implements AgentIdentityProvider {
-  constructor(config: ENSIdentityManagerConfig)
-
-  resolveAddress(): Promise<string | null>
-  getProfile(): Promise<AgentProfile | null>
-  setProfile(profile: AgentProfile): Promise<void>
-  getToolRegistryHash(): Promise<string | null>
-  setToolRegistryHash(hash: string): Promise<void>
-  getAXLPeerId(): Promise<string | null>
-  setAXLPeerId(peerId: string): Promise<void>
-  getAXLPeerIdForName(ensName: string): Promise<string | null>
-  discoverAgentsByCapability(capability: string, knownAgentNames: string[]): Promise<string[]>
-}
-```
-
-### `AXLClient`
-
-```typescript
-class AXLClient {
-  constructor(config?: AXLClientConfig)   // default port: 9002
-
-  getPeerId(): Promise<string>
-  sendMessage(toPeerId: string, message: AgentMessage): Promise<void>
-  sendTask(toPeerId: string, task: TaskRequest): Promise<TaskResult>
-  startListening(onMessage: (msg: AgentMessage) => void): void
-}
-```
-
-### `ToolSandbox`
-
-```typescript
-class ToolSandbox {
-  run(toolCode: string, params: object, timeoutMs?: number): Promise<SandboxResult>
-}
-```
-
-### `ToolEvaluator`
-
-```typescript
-class ToolEvaluator {
-  evaluate(tool: Tool, testCases?: TestCase[]): Promise<EvalResult>
-}
-```
-
-### `AgentIdentityProvider` (interface)
-
-```typescript
-interface AgentIdentityProvider {
-  getProfile(): Promise<AgentProfile | null>
-  setProfile(profile: AgentProfile): Promise<void>
-  getToolRegistryHash(): Promise<string | null>
-  setToolRegistryHash(rootHash: string): Promise<void>
-  setAXLPeerId?(peerId: string): Promise<void>
-  getAXLPeerIdForName?(ensName: string): Promise<string | null>
-}
-```
-
----
-
-## Known Limitations
-
-**Tool generation depends on LLM quality.** The generator targets `gpt-4o-mini` (via 0G Compute or OpenAI). Simple tools generate reliably. Complex multi-step tools may require multiple retry cycles before passing evaluation.
-
-**Evaluation threshold is fixed at 0.7.** Two LLM-generated test cases determine pass/fail. For tasks with nuanced expected output (e.g. prose summarization), the evaluator may not have the right reference to judge correctness.
-
-**AXL requires a locally running node.** The `AXLClient` connects to `localhost:9002`. There's no cloud fallback. Both agents must have AXL running to communicate. The demo uses simulated AXL messaging so the demo flow runs without the binary.
-
-**0G Compute provider availability is not guaranteed.** The framework tries to find a "chatbot" service on the 0G Compute network. If none are registered on testnet at the time of the call, it falls back to OpenAI. There's no retry or queuing on the compute side.
-
-**ENS writes require testnet ETH.** Setting text records costs gas. The demo uses a mock identity provider in memory. Real ENS integration requires a funded Sepolia wallet that controls the target `.eth` name.
-
-**Dashboard is not yet implemented.** The `dashboard` package exists but renders a static placeholder. Real-time agent monitoring is on the roadmap.
-
-**Tool index is a single local file.** `.zero-agent-index.json` is a flat map of tool names to 0G root hashes. It is not versioned, does not support concurrent writes from multiple processes, and does not merge with remote state automatically.
-
-**No production mainnet deployment.** The framework runs on Sepolia testnet for 0G Storage and ENS. Mainnet deployment requires funded wallets on both networks and updated RPC/resolver configuration.
+- Tool generation depends on LLM quality and provider availability.
+- `ToolEvaluator` uses simple sandbox execution and a `0.7` pass threshold; nuanced tasks may need custom tests.
+- `ExperienceMemory` is local JSON by default. It is reliable for demos and local use, but not a multi-writer database.
+- The improvement path is intentionally conservative. It only saves improved tools after evaluation passes.
+- Node `vm` fallback is not a hard security boundary. Use process/container isolation for untrusted production workloads.
+- Real AXL requires a local AXL node. The demo uses in-process simulation if AXL is unavailable.
+- Real ENS writes require Sepolia gas and control of the target ENS name.
+- Dashboard currently builds but is still minimal/static.
+- The demo agent has an offline fallback tool for reliability; that is not the same as live LLM generation.
 
 ---
 
 ## Roadmap
 
-**Near term**
+Near term:
 
-- [ ] Dashboard with real-time agent event stream
-- [ ] Tool versioning and rollback in the registry
-- [ ] Cross-platform AXL setup script (macOS/Linux)
-- [ ] Mainnet configuration for 0G and ENS
-- [ ] Tool deprecation and garbage collection
+- richer dashboard event stream for strategy, reflection, and memory
+- explicit tests for the improvement path in the repo test suite
+- configurable strategy thresholds
+- configurable evaluation test cases per agent domain
+- stronger process-level sandbox option for production deployments
 
-**Framework evolution**
+Framework direction:
 
-- [ ] Multi-agent capability negotiation via ENS discovery
-- [ ] Tool composition — agents build new tools from existing ones
-- [ ] Reputation layer — track tool reliability scores across agents over time
-- [ ] Agent marketplace — publish and sell tool libraries to other agent networks
-- [ ] Structured tool schemas — type-safe contracts between tool producer and consumer
-
-**Developer experience**
-
-- [ ] `create-zero-agent` CLI scaffold
-- [x] npm package publish (`@zero-agents/core@0.0.1`)
-- [ ] Tool library browser UI
-- [ ] Hosted demo on public testnet
-
----
-
-## Why This Is Framework-Level Work
-
-Most agent frameworks are application frameworks — they give you a pre-built agent loop that you configure. ZeroAgent is a primitive framework: it gives you the components to build an agent loop that can modify itself.
-
-The key distinction: **ZeroAgent's agents change their own capability surface at runtime.** The developer doesn't write the tools. The agent writes, tests, stores, and reuses them. The developer writes the agent's decision logic and domain context.
-
-This is analogous to how a database framework (Prisma, Drizzle) doesn't tell you what to store — it gives you the operations for storing and retrieving things reliably. ZeroAgent doesn't tell you what tools to build — it gives you the operations for generating, validating, and persisting tools reliably.
-
-The components are independently useful:
-- `ToolSandbox` can sandbox-test any generated code
-- `ToolEvaluator` can score any callable function
-- `ENSIdentityManager` is a general-purpose agent identity provider
-- `AXLClient` is a standalone Gensyn AXL HTTP client
-- `ToolRegistry` is a 0G-backed key-value store for code artifacts
-
-Each of these is a reusable primitive. The `SelfEvolvingAgent` is one way to combine them. The interfaces are designed so you can replace any component with your own implementation.
-
----
-
-## Contributing
-
-The repository is a pnpm monorepo using TypeScript strict mode throughout.
-
-```bash
-git clone https://github.com/your-org/zero-agents
-cd zero-agents
-pnpm install
-pnpm build
-```
-
-Code lives in `packages/core/src`. The test scripts in `scripts/` are the primary way to verify changes against real infrastructure.
-
-TypeScript config enforces `strict: true`, `noUnusedLocals`, `noUnusedParameters`, and `noImplicitReturns`. All code must compile cleanly before a PR.
-
-Open issues for:
-- Bug reports (include error output and which script triggered it)
-- Integration failures (0G / ENS / AXL — include network conditions)
-- API design feedback
+- 0G-backed experience memory, not just local JSON
+- first-class tool version history and rollback
+- deeper ToolImprover integration for post-success low-quality reflections
+- ENS-based agent discovery by capability
+- real AXL multi-agent examples beyond local simulation
+- CLI scaffold for new agents
 
 ---
 
@@ -823,8 +509,8 @@ MIT
 
 ---
 
-## Built For
+## Built for
 
-[ETHGlobal Open Agents](https://ethglobal.com/events/agents)
+ETHGlobal Open Agents 2026.
 
-Sponsor integrations: **0G** (storage + compute) · **ENS** (agent identity) · **Gensyn** (P2P coordination)
+Sponsor integrations: 0G Storage + Compute, ENS identity, Gensyn AXL communication.
