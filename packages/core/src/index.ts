@@ -40,6 +40,11 @@ export { EvolutionEngine } from './evolution-engine.js';
  */
 export { ToolRegistry } from './storage/tool-registry.js';
 
+// ─── Memory ──────────────────────────────────────────────────────────────────
+
+/** Stores task experiences locally with optional best-effort 0G persistence. */
+export { ExperienceMemory } from './memory/experience-memory.js';
+
 // ─── Generation ──────────────────────────────────────────────────────────────
 
 /**
@@ -119,6 +124,9 @@ export type { Tool, ToolHistory } from './storage/tool-registry.js';
 
 /** Constructor options for {@link ToolRegistry}. */
 export type { ToolRegistryOptions } from './storage/tool-registry.js';
+
+/** A stored task experience with reflection and optional 0G storage hash. */
+export type { ExperienceRecord } from './memory/experience-memory.js';
 
 /** Options for `uploadToZeroG` / `downloadFromZeroG` (private key, RPC overrides). */
 export type { ZeroGStorageOptions } from './storage/zero-g.js';
