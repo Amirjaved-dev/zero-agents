@@ -45,7 +45,7 @@ export class ToolEvaluator {
     const testResults = await Promise.all(
       cases.map(async (testCase) => {
         const result = await this.sandbox.run(tool.code, testCase.input);
-        const passed = result.success && this.outputMatches(result.output, testCase.expectedOutput);
+        const passed = result.success && this.outputMatches(result.output, testCase.expectedOutput, tool.schema.output);
 
         return { testCase, passed, result };
       })
@@ -126,12 +126,58 @@ export class ToolEvaluator {
     return parsed.testCases;
   }
 
-  private outputMatches(output: unknown, expectedOutput: unknown): boolean {
+  private outputMatches(output: unknown, expectedOutput: unknown, outputSchema: object): boolean {
     if (expectedOutput === undefined || expectedOutput === null) {
-      return true;
+      return this.outputMatchesSchema(output, outputSchema);
     }
 
     return JSON.stringify(output) === JSON.stringify(expectedOutput);
+  }
+
+  private outputMatchesSchema(output: unknown, outputSchema: object): boolean {
+    const entries = Object.entries(outputSchema);
+    if (entries.length === 0) {
+      // Empty schemas are valid for scalar tools. In that case a successful
+      // execution is the only deterministic signal available without a verifier.
+      return output !== undefined;
+    }
+
+    if (!this.isRecord(output)) {
+      return false;
+    }
+
+    return entries.every(([key, expected]) => {
+      if (!(key in output)) return false;
+
+      const actual = output[key];
+      if (typeof expected === 'string') {
+        return this.valueMatchesTypeName(actual, expected);
+      }
+
+      if (typeof expected === 'number') return typeof actual === 'number';
+      if (typeof expected === 'boolean') return typeof actual === 'boolean';
+      if (Array.isArray(expected)) return Array.isArray(actual);
+      if (this.isRecord(expected)) return this.isRecord(actual);
+
+      return actual !== undefined;
+    });
+  }
+
+  private valueMatchesTypeName(value: unknown, typeName: string): boolean {
+    switch (typeName.toLowerCase()) {
+      case 'string':
+        return typeof value === 'string';
+      case 'number':
+        return typeof value === 'number' && Number.isFinite(value);
+      case 'boolean':
+        return typeof value === 'boolean';
+      case 'array':
+        return Array.isArray(value);
+      case 'object':
+        return this.isRecord(value);
+      default:
+        return value !== undefined;
+    }
   }
 
   private createFeedback(testResults: TestCaseResult[], score: number): string {
