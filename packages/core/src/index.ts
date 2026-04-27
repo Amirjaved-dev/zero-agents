@@ -32,6 +32,9 @@ export { SelfEvolvingAgent } from './self-evolving-agent.js';
 /** Drives the LLM retry loop that generates and validates new tools. */
 export { EvolutionEngine } from './evolution-engine.js';
 
+/** Selects a pre-task strategy from available tools and prior experiences. */
+export { StrategyAdapter } from './evolution/strategy-adapter.js';
+
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 /**
@@ -160,6 +163,9 @@ export type { TaskResult } from './self-evolving-agent.js';
 
 /** Event emitted by {@link EvolutionEngine} on each generation step. */
 export type { EvolutionEvent } from './evolution-engine.js';
+
+/** Decision returned by {@link StrategyAdapter}. */
+export type { StrategyAdapterInput, StrategyDecision, StrategyName } from './evolution/strategy-adapter.js';
 
 /** Input and output types for post-task reflection. */
 export type { ReflectionInput, ReflectionResult, RecommendedStrategy } from './reflection/reflection-engine.js';
