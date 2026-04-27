@@ -7,6 +7,8 @@ import { ToolRegistry, type Tool } from './storage/tool-registry.js';
 import type { AgentIdentityProvider, AgentProfile } from './identity/types.js';
 import { AgentCoordinator } from './communication/agent-coordinator.js';
 import { AXLClient } from './communication/axl-client.js';
+import { ReflectionEngine, type ReflectionResult } from './reflection/reflection-engine.js';
+import { ExperienceMemory } from './memory/experience-memory.js';
 
 export interface SelfEvolvingAgentConfig {
   name: string;
@@ -32,6 +34,8 @@ export interface SelfEvolvingAgentConfig {
   zeroGIndexerRpc?: string;
   /** How long (ms) to cache the downloaded tool index before re-fetching. Default: 60 000. */
   indexCacheTtlMs?: number;
+  /** Local JSON path for task experience memory. Defaults to .zero-agent-experiences.json. */
+  experienceMemoryPath?: string;
 }
 
 export interface AgentConfig {
@@ -42,6 +46,8 @@ export interface AgentConfig {
   axlEnabled?: boolean;
   /** Polling interval (ms) for the AXL /recv endpoint. Default: 500. */
   axlPollIntervalMs?: number;
+  /** Local JSON path for task experience memory. Defaults to .zero-agent-experiences.json. */
+  experienceMemoryPath?: string;
 }
 
 export interface AgentState {
@@ -61,10 +67,12 @@ export interface TaskResult {
   toolUsed: string;
   wasGenerated: boolean;
   executionTimeMs: number;
+  reflection?: ReflectionResult;
+  experienceId?: string;
 }
 
 export interface AgentStepEvent {
-  type: 'search' | 'miss' | 'generating' | 'sandboxing' | 'evaluating' | 'saving' | 'executing' | 'done' | 'error';
+  type: 'search' | 'miss' | 'generating' | 'sandboxing' | 'evaluating' | 'saving' | 'executing' | 'reflecting' | 'done' | 'error';
   message: string;
   data?: any;
 }
@@ -77,6 +85,8 @@ export class SelfEvolvingAgent extends EventEmitter {
   protected readonly registry: ToolRegistry;
   protected readonly sandbox: ToolSandbox;
   protected readonly evolutionEngine: EvolutionEngine;
+  protected readonly reflectionEngine: ReflectionEngine;
+  protected readonly experienceMemory: ExperienceMemory;
   private readonly state: AgentState;
   private readonly identity?: AgentIdentityProvider;
   private readonly axlClient: AXLClient;
@@ -118,6 +128,8 @@ export class SelfEvolvingAgent extends EventEmitter {
       zeroGIndexerRpc
     });
     this.sandbox = new ToolSandbox();
+    this.reflectionEngine = new ReflectionEngine();
+    this.experienceMemory = new ExperienceMemory({ filePath: config.experienceMemoryPath });
     this.evolutionEngine = new EvolutionEngine(
       new ToolGenerator({ zeroGPrivateKey, openAiKey, zeroGBlockchainRpc }),
       this.sandbox,
@@ -177,6 +189,7 @@ export class SelfEvolvingAgent extends EventEmitter {
       }
 
       const result = await this.executeWithTool(tool, task, wasGenerated, startedAt);
+      await this.reflectAndSaveExperience(task, result, wasGenerated ? 'generate_new_tool' : 'reuse_existing_tool');
 
       this.emitStep({ type: 'done', message: 'Task complete.', data: result });
       return result;
@@ -184,6 +197,10 @@ export class SelfEvolvingAgent extends EventEmitter {
       this.emitStep({ type: 'error', message: this.getErrorMessage(error), data: { error } });
       throw error;
     }
+  }
+
+  async run(task: string | TaskRequest): Promise<TaskResult> {
+    return this.handleTask(typeof task === 'string' ? { description: task } : task);
   }
 
   async collaborateWith(otherAgentEnsName: string, task: TaskRequest): Promise<TaskResult> {
@@ -207,6 +224,10 @@ export class SelfEvolvingAgent extends EventEmitter {
 
   getEvolutionEngine(): EvolutionEngine {
     return this.evolutionEngine;
+  }
+
+  getExperienceMemory(): ExperienceMemory {
+    return this.experienceMemory;
   }
 
   getCoordinator(): AgentCoordinator | null {
@@ -234,6 +255,42 @@ export class SelfEvolvingAgent extends EventEmitter {
       wasGenerated,
       executionTimeMs: Date.now() - startedAt
     };
+  }
+
+  private async reflectAndSaveExperience(task: TaskRequest, result: TaskResult, strategy: string): Promise<void> {
+    this.emitStep({ type: 'reflecting', message: 'Reflecting on result...', data: { task } });
+    const reflection = this.reflectionEngine.reflect({
+      agentName: this.name,
+      task: task.description,
+      strategy,
+      toolUsed: result.toolUsed,
+      result: result.output,
+      executionTimeMs: result.executionTimeMs
+    });
+
+    result.reflection = reflection;
+
+    try {
+      const experience = await this.experienceMemory.saveExperience({
+        agentName: this.name,
+        task: task.description,
+        strategy,
+        toolUsed: result.toolUsed,
+        resultSummary: this.summarizeResult(result.output),
+        success: reflection.success,
+        qualityScore: reflection.qualityScore,
+        reflection
+      });
+
+      result.experienceId = experience.id;
+      this.emitStep({ type: 'saving', message: 'Experience saved...', data: { experienceId: experience.id } });
+    } catch (error) {
+      this.emitStep({
+        type: 'error',
+        message: `Experience save failed (task result will still be returned): ${this.getErrorMessage(error)}`,
+        data: { error }
+      });
+    }
   }
 
   private async initializeAXL(): Promise<void> {
@@ -320,6 +377,18 @@ export class SelfEvolvingAgent extends EventEmitter {
 
   private getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private summarizeResult(result: unknown): string {
+    if (typeof result === 'string') {
+      return result.slice(0, 500);
+    }
+
+    try {
+      return JSON.stringify(result).slice(0, 500);
+    } catch {
+      return String(result).slice(0, 500);
+    }
   }
 }
 
