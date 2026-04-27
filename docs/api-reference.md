@@ -288,7 +288,7 @@ getAXLPeerIdForName(ensName: string): Promise<string | null>
 discoverAgentsByCapability(capability: string, agentNames: string[]): Promise<string[]>
 ```
 
-**Network:** Sepolia testnet. Resolver: `0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5`.
+**Network:** Sepolia testnet. The manager resolves the ENS name's configured resolver before reading or writing text records.
 
 **Text records written:**
 

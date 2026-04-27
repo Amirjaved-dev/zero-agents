@@ -1,10 +1,8 @@
-import { createPublicClient, createWalletClient, http, getContract } from 'viem'
+import { createPublicClient, createWalletClient, http, getContract, type Address } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { sepolia } from 'viem/chains'
 import { namehash, normalize } from 'viem/ens'
 import type { AgentIdentityProvider, AgentProfile } from './types.js'
-
-const PUBLIC_RESOLVER_ADDRESS = '0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5' as const
 
 const RESOLVER_ABI = [
   {
@@ -52,7 +50,7 @@ export class ENSIdentityManager implements AgentIdentityProvider {
 
   constructor(config: ENSIdentityManagerConfig) {
     this.ensName = config.ensName;
-    this.account = privateKeyToAccount(config.privateKey as `0x${string}`)
+    this.account = privateKeyToAccount(this.normalizePrivateKey(config.privateKey))
 
     const rpcUrl = config.rpcUrl ?? 'https://sepolia.drpc.org'
 
@@ -106,7 +104,7 @@ export class ENSIdentityManager implements AgentIdentityProvider {
 
   async getAXLPeerIdForName(ensName: string): Promise<string | null> {
     try {
-      return this.getTextRecordForNode(namehash(normalize(ensName)), 'zeroagent.axlPeerId')
+      return this.getTextRecordForNode(namehash(normalize(ensName)), 'zeroagent.axlPeerId', ensName)
     } catch {
       return null
     }
@@ -161,8 +159,13 @@ export class ENSIdentityManager implements AgentIdentityProvider {
   }
 
   async setAgentProfile(profile: AgentProfile): Promise<void> {
+    const resolverAddress = await this.getResolverAddress(this.ensName)
+    if (!resolverAddress) {
+      throw new Error(`ENS name ${this.ensName} does not have a resolver configured`)
+    }
+
     const resolver = getContract({
-      address: PUBLIC_RESOLVER_ADDRESS,
+      address: resolverAddress,
       abi: RESOLVER_ABI,
       client: this.walletClient
     })
@@ -201,8 +204,11 @@ export class ENSIdentityManager implements AgentIdentityProvider {
     for (const name of knownAgentNames) {
       try {
         const node = namehash(normalize(name))
+        const resolverAddress = await this.getResolverAddress(name)
+        if (!resolverAddress) continue
+
         const contract = getContract({
-          address: PUBLIC_RESOLVER_ADDRESS,
+          address: resolverAddress,
           abi: RESOLVER_ABI,
           client: this.publicClient
         })
@@ -226,10 +232,13 @@ export class ENSIdentityManager implements AgentIdentityProvider {
     return this.getTextRecordForNode(this.node, key)
   }
 
-  private async getTextRecordForNode(node: `0x${string}`, key: string): Promise<string | null> {
+  private async getTextRecordForNode(node: `0x${string}`, key: string, ensName = this.ensName): Promise<string | null> {
     try {
+      const resolverAddress = await this.getResolverAddress(ensName)
+      if (!resolverAddress) return null
+
       const contract = getContract({
-        address: PUBLIC_RESOLVER_ADDRESS,
+        address: resolverAddress,
         abi: RESOLVER_ABI,
         client: this.publicClient
       })
@@ -239,5 +248,18 @@ export class ENSIdentityManager implements AgentIdentityProvider {
     } catch {
       return null
     }
+  }
+
+  private async getResolverAddress(ensName: string): Promise<Address | null> {
+    try {
+      return await this.publicClient.getEnsResolver({ name: normalize(ensName) })
+    } catch {
+      return null
+    }
+  }
+
+  private normalizePrivateKey(privateKey: string): `0x${string}` {
+    const trimmed = privateKey.trim()
+    return (trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`) as `0x${string}`
   }
 }
