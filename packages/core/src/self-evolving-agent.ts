@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { EvolutionEngine, type EvolutionEvent } from './evolution-engine.js';
 import { ToolGenerator } from './generation/tool-generator.js';
-import { ToolEvaluator } from './sandbox/tool-evaluator.js';
+import { ToolEvaluator, type EvalResult } from './sandbox/tool-evaluator.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
 import type { AgentIdentityProvider, AgentProfile } from './identity/types.js';
@@ -10,6 +11,7 @@ import { AXLClient } from './communication/axl-client.js';
 import { ReflectionEngine, type ReflectionResult } from './reflection/reflection-engine.js';
 import { ExperienceMemory } from './memory/experience-memory.js';
 import { StrategyAdapter, type StrategyDecision, type StrategyName } from './evolution/strategy-adapter.js';
+import { ToolImprover, type ImprovedToolCandidate } from './tools/tool-improver.js';
 
 export interface SelfEvolvingAgentConfig {
   name: string;
@@ -73,6 +75,7 @@ export interface TaskResult {
   confidence?: number;
   reflection?: ReflectionResult;
   experienceId?: string;
+  wasImproved?: boolean;
 }
 
 export interface AgentStepEvent {
@@ -92,6 +95,8 @@ export class SelfEvolvingAgent extends EventEmitter {
   protected readonly reflectionEngine: ReflectionEngine;
   protected readonly experienceMemory: ExperienceMemory;
   protected readonly strategyAdapter: StrategyAdapter;
+  protected readonly toolImprover: ToolImprover;
+  protected readonly toolEvaluator: ToolEvaluator;
   private readonly state: AgentState;
   private readonly identity?: AgentIdentityProvider;
   private readonly axlClient: AXLClient;
@@ -132,14 +137,17 @@ export class SelfEvolvingAgent extends EventEmitter {
       zeroGBlockchainRpc,
       zeroGIndexerRpc
     });
+    const generator = new ToolGenerator({ zeroGPrivateKey, openAiKey, zeroGBlockchainRpc });
     this.sandbox = new ToolSandbox();
     this.reflectionEngine = new ReflectionEngine();
     this.experienceMemory = new ExperienceMemory({ filePath: config.experienceMemoryPath });
     this.strategyAdapter = new StrategyAdapter();
+    this.toolImprover = new ToolImprover({ generator });
+    this.toolEvaluator = new ToolEvaluator(this.sandbox, openAiKey, testCaseTimeoutMs);
     this.evolutionEngine = new EvolutionEngine(
-      new ToolGenerator({ zeroGPrivateKey, openAiKey, zeroGBlockchainRpc }),
+      generator,
       this.sandbox,
-      new ToolEvaluator(this.sandbox, openAiKey, testCaseTimeoutMs),
+      this.toolEvaluator,
       this.registry,
       evolutionTimeoutMs,
       maxGenerationAttempts
@@ -222,9 +230,32 @@ export class SelfEvolvingAgent extends EventEmitter {
       }
       selectedToolName = tool.name;
 
-      const result = await this.executeWithTool(tool, task, wasGenerated, startedAt);
+      let result: TaskResult;
+      try {
+        result = await this.executeWithTool(tool, task, wasGenerated, startedAt);
+      } catch (executionError) {
+        if (wasGenerated) {
+          throw executionError;
+        }
+
+        result = await this.tryImproveAndExecuteTool(tool, task, executionError, startedAt);
+        this.applyStrategyMetadata(result, strategyDecision);
+        await this.reflectAndSaveExperience(
+          task,
+          result,
+          result.wasImproved ? 'improve_existing_tool' : strategy,
+          this.isGracefulToolErrorResult(result) ? result.output.error : undefined
+        );
+        this.emitStep({ type: 'done', message: 'Task complete.', data: result });
+        return result;
+      }
       this.applyStrategyMetadata(result, strategyDecision);
       await this.reflectAndSaveExperience(task, result, strategy);
+
+      if (result.reflection?.improvementNeeded && !wasGenerated) {
+        await this.trySaveImprovedVersion(tool, task, undefined, result.reflection);
+        result.wasImproved = true;
+      }
 
       this.emitStep({ type: 'done', message: 'Task complete.', data: result });
       return result;
@@ -270,6 +301,10 @@ export class SelfEvolvingAgent extends EventEmitter {
     return this.strategyAdapter;
   }
 
+  getToolImprover(): ToolImprover {
+    return this.toolImprover;
+  }
+
   getCoordinator(): AgentCoordinator | null {
     return this.coordinator ?? null;
   }
@@ -293,7 +328,8 @@ export class SelfEvolvingAgent extends EventEmitter {
       output: sandboxResult.output,
       toolUsed: tool.name,
       wasGenerated,
-      executionTimeMs: Date.now() - startedAt
+      executionTimeMs: Date.now() - startedAt,
+      wasImproved: false
     };
   }
 
@@ -314,7 +350,8 @@ export class SelfEvolvingAgent extends EventEmitter {
       executionTimeMs: Date.now() - startedAt,
       strategy: decision.strategy,
       strategyReason: decision.reason,
-      confidence: decision.confidence
+      confidence: decision.confidence,
+      wasImproved: false
     };
   }
 
@@ -331,14 +368,141 @@ export class SelfEvolvingAgent extends EventEmitter {
     return null;
   }
 
-  protected async reflectAndSaveExperience(task: TaskRequest, result: TaskResult, strategy: string): Promise<void> {
+  protected async tryImproveAndExecuteTool(
+    originalTool: Tool,
+    task: TaskRequest,
+    failureReason: unknown,
+    startedAt: number
+  ): Promise<TaskResult> {
+    try {
+      const improvedTool = await this.trySaveImprovedVersion(originalTool, task, this.getErrorMessage(failureReason));
+      if (!improvedTool) {
+        return this.createGracefulToolErrorResult(originalTool, failureReason, startedAt, false);
+      }
+
+      const result = await this.executeWithTool(improvedTool, task, false, startedAt);
+      result.wasImproved = true;
+      return result;
+    } catch (error) {
+      return this.createGracefulToolErrorResult(originalTool, error, startedAt, false);
+    }
+  }
+
+  protected async trySaveImprovedVersion(
+    originalTool: Tool,
+    task: TaskRequest,
+    failureReason?: string,
+    reflection?: ReflectionResult
+  ): Promise<Tool | null> {
+    this.emitStep({ type: 'evaluating', message: 'Improvement needed...', data: { toolName: originalTool.name } });
+    this.emitStep({ type: 'generating', message: 'Generating improved tool version...', data: { toolName: originalTool.name } });
+
+    let candidate: ImprovedToolCandidate;
+    try {
+      candidate = await this.toolImprover.improveTool({
+        originalTool: {
+          id: originalTool.id,
+          name: originalTool.name,
+          description: originalTool.description,
+          code: originalTool.code,
+          version: this.getToolVersion(originalTool)
+        },
+        task: task.description,
+        failureReason,
+        reflection
+      });
+    } catch (error) {
+      this.emitStep({ type: 'error', message: `Tool improvement skipped: ${this.getErrorMessage(error)}`, data: { error } });
+      return null;
+    }
+
+    const improvedTool = this.createImprovedTool(originalTool, candidate);
+    let evaluation: EvalResult;
+    try {
+      evaluation = await this.toolEvaluator.evaluate(improvedTool, [
+        { input: task.params ?? {}, description: 'Improved tool smoke test' }
+      ]);
+    } catch (error) {
+      this.emitStep({ type: 'error', message: `Improved tool evaluation failed: ${this.getErrorMessage(error)}`, data: { error } });
+      return null;
+    }
+
+    improvedTool.successRate = evaluation.score;
+    this.emitStep({
+      type: 'evaluating',
+      message: 'Improved tool evaluated...',
+      data: { toolName: improvedTool.name, score: evaluation.score, passed: evaluation.passed }
+    });
+
+    if (!evaluation.passed) {
+      return null;
+    }
+
+    try {
+      await this.registry.saveTool(improvedTool);
+    } catch (error) {
+      this.emitStep({ type: 'error', message: `Saving improved version failed: ${this.getErrorMessage(error)}`, data: { error } });
+      return null;
+    }
+    this.emitStep({ type: 'saving', message: 'Saved improved version...', data: { toolName: improvedTool.name } });
+    return improvedTool;
+  }
+
+  protected createGracefulToolErrorResult(
+    tool: Tool,
+    error: unknown,
+    startedAt: number,
+    wasImproved: boolean
+  ): TaskResult {
+    return {
+      output: {
+        error: this.getErrorMessage(error),
+        recovered: false
+      },
+      toolUsed: tool.name,
+      wasGenerated: false,
+      executionTimeMs: Date.now() - startedAt,
+      wasImproved
+    };
+  }
+
+  protected createImprovedTool(originalTool: Tool, candidate: ImprovedToolCandidate): Tool {
+    return {
+      id: randomUUID(),
+      name: candidate.name,
+      description: candidate.description,
+      code: candidate.code,
+      schema: originalTool.schema,
+      tags: [...new Set([...originalTool.tags, 'improved'])],
+      successRate: 0,
+      usageCount: 0,
+      createdAt: candidate.createdAt
+    };
+  }
+
+  protected isGracefulToolErrorResult(result: TaskResult): result is TaskResult & { output: { error: string } } {
+    return (
+      result.output !== null &&
+      typeof result.output === 'object' &&
+      !Array.isArray(result.output) &&
+      typeof (result.output as Record<string, unknown>).error === 'string'
+    );
+  }
+
+  private getToolVersion(tool: Tool): string | undefined {
+    const value = (tool as Tool & { version?: unknown }).version;
+    return typeof value === 'string' ? value : undefined;
+  }
+
+  protected async reflectAndSaveExperience(task: TaskRequest, result: TaskResult, strategy: string, error?: unknown): Promise<void> {
     this.emitStep({ type: 'reflecting', message: 'Reflecting on result...', data: { task } });
     const reflection = this.reflectionEngine.reflect({
       agentName: this.name,
       task: task.description,
       strategy,
       toolUsed: result.toolUsed,
-      result: result.output,
+      result: error === undefined ? result.output : undefined,
+      error,
       executionTimeMs: result.executionTimeMs
     });
 
@@ -350,7 +514,7 @@ export class SelfEvolvingAgent extends EventEmitter {
         task: task.description,
         strategy,
         toolUsed: result.toolUsed,
-        resultSummary: this.summarizeResult(result.output),
+        resultSummary: error === undefined ? this.summarizeResult(result.output) : this.getErrorMessage(error),
         success: reflection.success,
         qualityScore: reflection.qualityScore,
         reflection
