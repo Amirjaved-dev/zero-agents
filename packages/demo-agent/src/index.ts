@@ -23,6 +23,7 @@ export interface ResearchAgentOptions {
   identity?: AgentIdentityProvider;
   axlPort?: number;
   registryPath?: string;
+  experienceMemoryPath?: string;
   allowOfflineStorage?: boolean;
 }
 
@@ -50,7 +51,8 @@ export class ResearchAgent extends SelfEvolvingAgent {
       identity: options.identity,
       zeroGPrivateKey: options.zeroGPrivateKey ?? process.env.ZERO_G_PRIVATE_KEY ?? '',
       openAiKey: options.openAiKey ?? process.env.OPENAI_API_KEY,
-      axlPort: options.axlPort
+      axlPort: options.axlPort,
+      experienceMemoryPath: options.experienceMemoryPath
     };
 
     super(config);
@@ -61,65 +63,76 @@ export class ResearchAgent extends SelfEvolvingAgent {
 
   override async handleTask(task: TaskRequest): Promise<TaskResult> {
     const startedAt = Date.now();
+    let selectedToolName: string | undefined;
+    let strategy = 'reuse_existing_tool';
 
-    this.emitDemoStep('search', 'Searching registry for a matching research tool...', { task });
-    const existingTool = await this.findExistingTool(task.description);
+    try {
+      this.emitDemoStep('search', 'Searching registry for a matching research tool...', { task });
+      const existingTool = await this.findExistingTool(task.description);
 
-    let tool = existingTool;
-    let wasGenerated = false;
+      let tool = existingTool;
+      let wasGenerated = false;
 
-    if (!tool) {
-      this.emitDemoStep('miss', 'MISS: no reusable tool found in the registry.', { task });
+      if (!tool) {
+        strategy = 'generate_new_tool';
+        this.emitDemoStep('miss', 'MISS: no reusable tool found in the registry.', { task });
 
-      const hasLLMKey = !!(process.env.OPENAI_API_KEY ?? process.env.ZERO_G_PRIVATE_KEY);
+        const hasLLMKey = !!(process.env.OPENAI_API_KEY ?? process.env.ZERO_G_PRIVATE_KEY);
 
-      if (hasLLMKey) {
-        this.emitDemoStep('generating', 'Generating tool via LLM (real evolution engine)...', { toolName: 'web_search_and_summarize' });
-        tool = await this.getEvolutionEngine().evolve(task.description, { query: task.description });
-      } else {
-        this.emitDemoStep('generating', '[OFFLINE] No LLM key — using built-in fallback tool...', { toolName: 'web_search_and_summarize' });
-        tool = this.createWebSearchAndSummarizeTool();
+        if (hasLLMKey) {
+          this.emitDemoStep('generating', 'Generating tool via LLM (real evolution engine)...', { toolName: 'web_search_and_summarize' });
+          tool = await this.getEvolutionEngine().evolve(task.description, { query: task.description });
+        } else {
+          this.emitDemoStep('generating', '[OFFLINE] No LLM key — using built-in fallback tool...', { toolName: 'web_search_and_summarize' });
+          tool = this.createWebSearchAndSummarizeTool();
 
-        this.emitDemoStep('sandboxing', `Sandbox testing generated tool ${tool.name}...`, { toolName: tool.name });
-        const sandboxResult = await this.demoSandbox.run(tool.code, { query: task.description });
-        if (!sandboxResult.success) {
-          throw new Error(sandboxResult.error ?? 'Fallback tool sandbox failed');
+          this.emitDemoStep('sandboxing', `Sandbox testing generated tool ${tool.name}...`, { toolName: tool.name });
+          const sandboxResult = await this.demoSandbox.run(tool.code, { query: task.description });
+          if (!sandboxResult.success) {
+            throw new Error(sandboxResult.error ?? 'Fallback tool sandbox failed');
+          }
+
+          this.emitDemoStep('evaluating', `Evaluating generated tool ${tool.name}...`, { toolName: tool.name });
+          const evalResult = await this.evaluator.evaluate(tool, [
+            { input: { query: task.description }, description: 'Smoke test' }
+          ]);
+          tool.successRate = evalResult.score;
+
+          if (!evalResult.passed) {
+            throw new Error(`Fallback tool failed evaluation: ${evalResult.feedback}`);
+          }
         }
 
-        this.emitDemoStep('evaluating', `Evaluating generated tool ${tool.name}...`, { toolName: tool.name });
-        const evalResult = await this.evaluator.evaluate(tool, [
-          { input: { query: task.description }, description: 'Smoke test' }
-        ]);
-        tool.successRate = evalResult.score;
-
-        if (!evalResult.passed) {
-          throw new Error(`Fallback tool failed evaluation: ${evalResult.feedback}`);
-        }
+        wasGenerated = true;
+        this.emitDemoStep('saving', `Saving generated tool ${tool.name} to 0G storage...`, { toolName: tool.name });
+        await this.saveGeneratedTool(tool);
       }
 
-      wasGenerated = true;
-      this.emitDemoStep('saving', `Saving generated tool ${tool.name} to 0G storage...`, { toolName: tool.name });
-      await this.saveGeneratedTool(tool);
+      selectedToolName = tool.name;
+      this.emitDemoStep('executing', `Executing tool ${tool.name} for the task...`, { toolName: tool.name });
+      const execution = await this.demoSandbox.run(tool.code, { query: task.description });
+      if (!execution.success) {
+        throw new Error(execution.error ?? 'Tool execution failed');
+      }
+
+      tool.usageCount += 1;
+      this.memoryTools.set(tool.name, tool);
+
+      const result: TaskResult = {
+        output: execution.output,
+        toolUsed: tool.name,
+        wasGenerated,
+        executionTimeMs: Date.now() - startedAt
+      };
+
+      await this.reflectAndSaveExperience(task, result, strategy);
+      this.emitDemoStep('done', 'Task complete.', result);
+      return result;
+    } catch (error) {
+      await this.reflectAndSaveFailure(task, error, strategy, Date.now() - startedAt, selectedToolName);
+      this.emitDemoStep('error', error instanceof Error ? error.message : String(error), { error });
+      throw error;
     }
-
-    this.emitDemoStep('executing', `Executing tool ${tool.name} for the task...`, { toolName: tool.name });
-    const execution = await this.demoSandbox.run(tool.code, { query: task.description });
-    if (!execution.success) {
-      throw new Error(execution.error ?? 'Tool execution failed');
-    }
-
-    tool.usageCount += 1;
-    this.memoryTools.set(tool.name, tool);
-
-    const result: TaskResult = {
-      output: execution.output,
-      toolUsed: tool.name,
-      wasGenerated,
-      executionTimeMs: Date.now() - startedAt
-    };
-
-    this.emitDemoStep('done', 'Task complete.', result);
-    return result;
   }
 
   async importToolsFrom(agent: ResearchAgent): Promise<number> {

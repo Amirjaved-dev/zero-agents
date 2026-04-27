@@ -174,6 +174,8 @@ export class SelfEvolvingAgent extends EventEmitter {
 
   async handleTask(task: TaskRequest): Promise<TaskResult> {
     const startedAt = Date.now();
+    let selectedToolName: string | undefined;
+    let strategy = 'reuse_existing_tool';
 
     try {
       this.emitStep({ type: 'search', message: 'Searching for existing tool...', data: { task } });
@@ -184,16 +186,19 @@ export class SelfEvolvingAgent extends EventEmitter {
 
       if (!tool || tool.successRate <= 0.5) {
         this.emitStep({ type: 'miss', message: 'No tool found. Generating new tool...', data: { task } });
+        strategy = 'generate_new_tool';
         tool = await this.evolutionEngine.evolve(task.description, task.params ?? {});
         wasGenerated = true;
       }
+      selectedToolName = tool.name;
 
       const result = await this.executeWithTool(tool, task, wasGenerated, startedAt);
-      await this.reflectAndSaveExperience(task, result, wasGenerated ? 'generate_new_tool' : 'reuse_existing_tool');
+      await this.reflectAndSaveExperience(task, result, strategy);
 
       this.emitStep({ type: 'done', message: 'Task complete.', data: result });
       return result;
     } catch (error) {
+      await this.reflectAndSaveFailure(task, error, strategy, Date.now() - startedAt, selectedToolName);
       this.emitStep({ type: 'error', message: this.getErrorMessage(error), data: { error } });
       throw error;
     }
@@ -257,7 +262,7 @@ export class SelfEvolvingAgent extends EventEmitter {
     };
   }
 
-  private async reflectAndSaveExperience(task: TaskRequest, result: TaskResult, strategy: string): Promise<void> {
+  protected async reflectAndSaveExperience(task: TaskRequest, result: TaskResult, strategy: string): Promise<void> {
     this.emitStep({ type: 'reflecting', message: 'Reflecting on result...', data: { task } });
     const reflection = this.reflectionEngine.reflect({
       agentName: this.name,
@@ -289,6 +294,45 @@ export class SelfEvolvingAgent extends EventEmitter {
         type: 'error',
         message: `Experience save failed (task result will still be returned): ${this.getErrorMessage(error)}`,
         data: { error }
+      });
+    }
+  }
+
+  protected async reflectAndSaveFailure(
+    task: TaskRequest,
+    error: unknown,
+    strategy: string,
+    executionTimeMs: number,
+    toolUsed?: string
+  ): Promise<void> {
+    this.emitStep({ type: 'reflecting', message: 'Reflecting on result...', data: { task } });
+    const reflection = this.reflectionEngine.reflect({
+      agentName: this.name,
+      task: task.description,
+      strategy,
+      toolUsed,
+      error,
+      executionTimeMs
+    });
+
+    try {
+      const experience = await this.experienceMemory.saveExperience({
+        agentName: this.name,
+        task: task.description,
+        strategy,
+        toolUsed,
+        resultSummary: this.getErrorMessage(error),
+        success: false,
+        qualityScore: reflection.qualityScore,
+        reflection
+      });
+
+      this.emitStep({ type: 'saving', message: 'Experience saved...', data: { experienceId: experience.id } });
+    } catch (saveError) {
+      this.emitStep({
+        type: 'error',
+        message: `Experience save failed (original error will still be thrown): ${this.getErrorMessage(saveError)}`,
+        data: { error: saveError }
       });
     }
   }
