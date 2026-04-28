@@ -135,6 +135,11 @@ export class ToolEvaluator {
   }
 
   private outputMatchesSchema(output: unknown, outputSchema: object): boolean {
+    const scalarType = this.getScalarSchemaType(outputSchema);
+    if (scalarType) {
+      return this.valueMatchesTypeName(output, scalarType);
+    }
+
     const entries = Object.entries(outputSchema);
     if (entries.length === 0) {
       // Without expected output or a declared schema, "successful execution" is
@@ -178,6 +183,20 @@ export class ToolEvaluator {
       default:
         return value !== undefined;
     }
+  }
+
+  private getScalarSchemaType(outputSchema: object): string | null {
+    if (!this.isRecord(outputSchema)) {
+      return null;
+    }
+
+    const type = outputSchema.type;
+    if (typeof type !== 'string') {
+      return null;
+    }
+
+    const keys = Object.keys(outputSchema);
+    return keys.length === 1 ? type : null;
   }
 
   private createFeedback(testResults: TestCaseResult[], score: number): string {

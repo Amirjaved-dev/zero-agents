@@ -21,8 +21,9 @@ You must:
   "tags": []
 }
 4. The schemas must describe the real input/output fields using type strings like "string", "number", "boolean", "array", or "object"
-5. Do not return empty schemas unless the tool truly takes or returns no structured data
-6. No markdown, no backticks, pure JSON only`;
+5. If the tool returns a raw scalar, describe output as { "type": "number" } or the correct scalar type
+6. Do not return empty schemas unless the tool truly takes or returns no structured data
+7. No markdown, no backticks, pure JSON only`;
 
 interface GeneratedToolPayload {
   name: string;

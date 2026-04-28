@@ -78,3 +78,16 @@ test('passes scalar output with explicit expected output even when schema is emp
   assert.equal(result.passed, true);
   assert.equal(result.score, 1);
 });
+
+test('passes scalar output when schema declares top-level type', async () => {
+  const evaluator = new ToolEvaluator(new ToolSandbox({ allowUnsafeNodeVmFallback: true }));
+  const tool = createTool(
+    'async function execute(params) { return 42; }',
+    { type: 'number' }
+  );
+
+  const result = await evaluator.evaluate(tool, [{ input: {}, description: 'scalar schema smoke test' }]);
+
+  assert.equal(result.passed, true);
+  assert.equal(result.score, 1);
+});
