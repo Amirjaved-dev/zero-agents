@@ -446,7 +446,10 @@ pnpm test:evolution
 pnpm test:unit
 pnpm test:agent      # live 0G path when credentials are present
 pnpm test:storage    # live 0G upload/download
+pnpm test:live       # storage + ENS + two-run agent live checklist
 ```
+
+`pnpm test:live` is the pre-judge sponsor checklist. It expects live credentials in `.env` and runs the 0G storage upload/download check, ENS identity integration check, and the two-run agent reuse path with `ZERO_AGENT_LIVE_TEST=1` set for that process.
 
 ---
 
