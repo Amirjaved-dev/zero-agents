@@ -70,7 +70,7 @@ export interface TaskRequest {
 }
 
 export interface TaskResult {
-  output: any;
+  output: unknown;
   toolUsed: string;
   wasGenerated: boolean;
   executionTimeMs: number;
@@ -85,7 +85,7 @@ export interface TaskResult {
 export interface AgentStepEvent {
   type: 'search' | 'miss' | 'strategy' | 'generating' | 'sandboxing' | 'evaluating' | 'saving' | 'executing' | 'reflecting' | 'done' | 'error';
   message: string;
-  data?: any;
+  data?: unknown;
 }
 
 export class SelfEvolvingAgent extends EventEmitter {
@@ -211,6 +211,7 @@ export class SelfEvolvingAgent extends EventEmitter {
         similarExperiences
       });
       strategy = strategyDecision.strategy;
+      let resultStrategyDecision = strategyDecision;
       this.emitStep({ type: 'strategy', message: `Strategy selected: ${strategyDecision.strategy}`, data: strategyDecision });
       this.emitStep({ type: 'strategy', message: `Reason: ${strategyDecision.reason}`, data: strategyDecision });
 
@@ -228,9 +229,16 @@ export class SelfEvolvingAgent extends EventEmitter {
 
       if (!tool || tool.successRate <= 0.5 || strategyDecision.strategy !== 'reuse_existing_tool') {
         this.emitStep({ type: 'miss', message: 'No tool found. Generating new tool...', data: { task } });
-        strategy = !tool || tool.successRate <= 0.5 || strategyDecision.strategy === 'ask_another_agent'
-          ? 'generate_new_tool'
-          : strategyDecision.strategy;
+        strategy = 'generate_new_tool';
+        resultStrategyDecision = this.createActualStrategyDecision(
+          strategyDecision,
+          'generate_new_tool',
+          !tool
+            ? 'No reusable tool was available, so a new tool was generated.'
+            : strategyDecision.strategy === 'ask_another_agent'
+              ? 'No AXL delegation path was available in this run, so a new local tool was generated.'
+              : `Selected strategy "${strategyDecision.strategy}" required a fresh generated tool before execution.`
+        );
         tool = await this.evolutionEngine.evolve(task.description, task.params ?? {});
         wasGenerated = true;
       }
@@ -245,7 +253,14 @@ export class SelfEvolvingAgent extends EventEmitter {
         }
 
         result = await this.tryImproveAndExecuteTool(tool, task, executionError, startedAt);
-        this.applyStrategyMetadata(result, strategyDecision);
+        const executionStrategyDecision = result.wasImproved
+          ? this.createActualStrategyDecision(
+              strategyDecision,
+              'improve_existing_tool',
+              `Existing tool "${tool.name}" failed, so an improved version was generated, evaluated, and used.`
+            )
+          : resultStrategyDecision;
+        this.applyStrategyMetadata(result, executionStrategyDecision);
         await this.reflectAndSaveExperience(
           task,
           result,
@@ -255,12 +270,12 @@ export class SelfEvolvingAgent extends EventEmitter {
         this.emitStep({ type: 'done', message: 'Task complete.', data: result });
         return result;
       }
-      this.applyStrategyMetadata(result, strategyDecision);
+      this.applyStrategyMetadata(result, resultStrategyDecision);
       await this.reflectAndSaveExperience(task, result, strategy);
 
       if (result.reflection?.improvementNeeded && !wasGenerated) {
-        await this.trySaveImprovedVersion(tool, task, undefined, result.reflection);
-        result.wasImproved = true;
+        const improvedTool = await this.trySaveImprovedVersion(tool, task, undefined, result.reflection);
+        result.wasImproved = improvedTool !== null;
       }
 
       this.emitStep({ type: 'done', message: 'Task complete.', data: result });
@@ -343,6 +358,20 @@ export class SelfEvolvingAgent extends EventEmitter {
     result.strategy = decision.strategy;
     result.strategyReason = decision.reason;
     result.confidence = decision.confidence;
+  }
+
+  protected createActualStrategyDecision(
+    original: StrategyDecision,
+    strategy: StrategyName,
+    reason: string
+  ): StrategyDecision {
+    return {
+      ...original,
+      strategy,
+      reason,
+      selectedToolName: strategy === 'generate_new_tool' ? undefined : original.selectedToolName,
+      selectedToolId: strategy === 'generate_new_tool' ? undefined : original.selectedToolId
+    };
   }
 
   protected createRejectionResult(decision: StrategyDecision, startedAt = Date.now()): TaskResult {

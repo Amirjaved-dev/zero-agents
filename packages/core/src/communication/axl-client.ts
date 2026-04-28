@@ -13,7 +13,7 @@ export interface AXLClientConfig {
 export interface AgentMessage {
   type: 'task_request' | 'task_result' | 'tool_share' | 'ping';
   requestId: string;
-  payload: any;
+  payload: unknown;
   fromAgent?: string;
   timestamp: number;
 }

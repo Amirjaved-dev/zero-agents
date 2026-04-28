@@ -11,7 +11,7 @@ const DEFAULT_EVOLUTION_TIMEOUT_MS = 120_000;
 export interface EvolutionEvent {
   type: 'generating' | 'sandboxing' | 'evaluating' | 'saving';
   message: string;
-  data?: any;
+  data?: unknown;
 }
 
 export class EvolutionEngine extends EventEmitter {

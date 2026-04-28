@@ -15,13 +15,23 @@ export interface ToolSandboxOptions {
    * for hostile generated code, so production callers should keep this false.
    */
   allowUnsafeNodeVmFallback?: boolean;
+  /** Optional network allowlist for generated tool fetch() calls. Empty means any host. */
+  allowedFetchHostnames?: string[];
+  /** Maximum response body size copied back into the sandbox. Default: 1 MiB. */
+  maxFetchResponseBytes?: number;
 }
 
 export class ToolSandbox {
   private readonly allowUnsafeNodeVmFallback: boolean;
+  private readonly allowedFetchHostnames: Set<string> | null;
+  private readonly maxFetchResponseBytes: number;
 
   constructor(options: ToolSandboxOptions = {}) {
     this.allowUnsafeNodeVmFallback = options.allowUnsafeNodeVmFallback ?? false;
+    this.allowedFetchHostnames = options.allowedFetchHostnames && options.allowedFetchHostnames.length > 0
+      ? new Set(options.allowedFetchHostnames.map((host) => host.toLowerCase()))
+      : null;
+    this.maxFetchResponseBytes = options.maxFetchResponseBytes ?? 1024 * 1024;
   }
 
   async run(toolCode: string, params: object, timeoutMs = 3000): Promise<SandboxResult> {
@@ -87,8 +97,8 @@ export class ToolSandbox {
       if (Reference) {
         const fetchBridge = new Reference(async (url: string, optionsJson: string) => {
           const options: RequestInit = optionsJson ? (JSON.parse(optionsJson) as RequestInit) : {};
-          const res = await fetch(url, options);
-          const body = await res.text();
+          const res = await this.limitedFetch(url, options, timeoutMs);
+          const body = await this.readLimitedResponseBody(res);
           return JSON.stringify({ ok: res.ok, status: res.status, body });
         });
         await context.global.set('__fetchBridge', fetchBridge);
@@ -136,7 +146,7 @@ export class ToolSandbox {
       setInterval,
       clearInterval,
       // Network — intentionally available for tool execution
-      fetch,
+      fetch: (url: string, options?: RequestInit) => this.limitedFetch(url, options, timeoutMs),
       params: structuredClone(params)
     });
     const script = new Script(`(async () => { ${this.createSandboxSource(toolCode, false, 'params')} })()`);
@@ -214,6 +224,46 @@ export class ToolSandbox {
       const execute = (${toolCode});
       return execute(${paramsRef});
     `;
+  }
+
+  private async limitedFetch(url: string, options: RequestInit = {}, timeoutMs: number): Promise<Response> {
+    this.assertFetchAllowed(url);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: options.signal ?? controller.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private assertFetchAllowed(url: string): void {
+    if (!this.allowedFetchHostnames) return;
+
+    const hostname = new URL(url).hostname.toLowerCase();
+    if (!this.allowedFetchHostnames.has(hostname)) {
+      throw new Error(`fetch blocked for host: ${hostname}`);
+    }
+  }
+
+  private async readLimitedResponseBody(response: Response): Promise<string> {
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && Number(contentLength) > this.maxFetchResponseBytes) {
+      throw new Error(`fetch response exceeded ${this.maxFetchResponseBytes} bytes`);
+    }
+
+    const body = await response.text();
+    if (Buffer.byteLength(body, 'utf-8') > this.maxFetchResponseBytes) {
+      throw new Error(`fetch response exceeded ${this.maxFetchResponseBytes} bytes`);
+    }
+
+    return body;
   }
 
   private createFailureResult(error: unknown, startedAt: number): SandboxResult {

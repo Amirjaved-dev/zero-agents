@@ -8,7 +8,7 @@ const DEFAULT_TEST_CASE_TIMEOUT_MS = 30_000;
 
 export interface TestCase {
   input: object;
-  expectedOutput?: any;
+  expectedOutput?: unknown;
   description: string;
 }
 
@@ -67,7 +67,7 @@ export class ToolEvaluator {
     if (!apiKey) {
       return [
         {
-          input: {},
+          input: this.createSmokeInput(tool.schema.input),
           description: `Smoke test for ${tool.name}`
         }
       ];
@@ -132,6 +132,44 @@ export class ToolEvaluator {
     }
 
     return JSON.stringify(output) === JSON.stringify(expectedOutput);
+  }
+
+  private createSmokeInput(inputSchema: object): object {
+    if (!this.isRecord(inputSchema)) {
+      return {};
+    }
+
+    const input: Record<string, unknown> = {};
+    for (const [key, expected] of Object.entries(inputSchema)) {
+      input[key] = this.createSampleValue(expected);
+    }
+    return input;
+  }
+
+  private createSampleValue(expected: unknown): unknown {
+    if (typeof expected === 'string') {
+      switch (expected.toLowerCase()) {
+        case 'string':
+          return 'sample';
+        case 'number':
+          return 1;
+        case 'boolean':
+          return true;
+        case 'array':
+          return [];
+        case 'object':
+          return {};
+        default:
+          return null;
+      }
+    }
+
+    if (typeof expected === 'number') return 1;
+    if (typeof expected === 'boolean') return true;
+    if (Array.isArray(expected)) return [];
+    if (this.isRecord(expected)) return {};
+
+    return null;
   }
 
   private outputMatchesSchema(output: unknown, outputSchema: object): boolean {
