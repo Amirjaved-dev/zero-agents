@@ -36,20 +36,19 @@ const RESOLVER_ABI = [
 ] as const
 
 export interface ENSIdentityManagerConfig {
-  ensName: string
+  ensName?: string
   privateKey: string
   rpcUrl?: string
 }
 
 export class ENSIdentityManager implements AgentIdentityProvider {
-  readonly ensName: string
+  ensName: string
   private readonly account
   private readonly publicClient
   private readonly walletClient
-  private readonly node: `0x${string}`
+  private node!: `0x${string}`;
 
   constructor(config: ENSIdentityManagerConfig) {
-    this.ensName = config.ensName;
     this.account = privateKeyToAccount(this.normalizePrivateKey(config.privateKey))
 
     const rpcUrl = config.rpcUrl ?? 'https://sepolia.drpc.org'
@@ -65,8 +64,49 @@ export class ENSIdentityManager implements AgentIdentityProvider {
       account: this.account
     })
 
+    this.ensName = config.ensName ?? '';
+    this.setNodeFromName(this.ensName)
+  }
+
+  static async autoDetect(privateKey: string, rpcUrl?: string): Promise<ENSIdentityManager | null> {
+    const mgr = new ENSIdentityManager({ privateKey, rpcUrl })
+    const detected = await mgr.detectPrimaryName()
+    if (!detected) return null
+    mgr.ensName = detected
+    mgr.setNodeFromName(detected)
+    return mgr
+  }
+
+  async detectPrimaryName(): Promise<string | null> {
     try {
-      this.node = this.ensName ? namehash(normalize(this.ensName)) : ('0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`)
+      const name = await this.publicClient.getEnsName({ address: this.account.address })
+      return name ?? null
+    } catch {
+      return null
+    }
+  }
+
+  async resolveAllNames(): Promise<string[]> {
+    try {
+      const name = await this.detectPrimaryName()
+      if (!name) return []
+      return [name]
+    } catch {
+      return []
+    }
+  }
+
+  getWalletAddress(): string {
+    return this.account.address
+  }
+
+  hasEnsNameConfigured(): boolean {
+    return !!this.ensName && this.ensName.length > 0
+  }
+
+  private setNodeFromName(ensName: string): void {
+    try {
+      this.node = ensName ? namehash(normalize(ensName)) : ('0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`)
     } catch {
       this.node = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`
     }

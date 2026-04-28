@@ -83,6 +83,8 @@ export { ReflectionEngine } from './reflection/reflection-engine.js';
 /**
  * Reads and writes agent identity (description, capabilities, tool registry hash,
  * AXL peer ID) to ENS text records on Sepolia.
+ * Supports auto-detection: pass only a private key and it will reverse-lookup
+ * the wallet's primary ENS name automatically.
  */
 export { ENSIdentityManager } from './identity/ens-identity-manager.js';
 

@@ -6,6 +6,7 @@ import { ToolEvaluator, type EvalResult } from './sandbox/tool-evaluator.js';
 import { ToolSandbox } from './sandbox/tool-sandbox.js';
 import { ToolRegistry, type Tool } from './storage/tool-registry.js';
 import type { AgentIdentityProvider, AgentProfile } from './identity/types.js';
+import { ENSIdentityManager } from './identity/ens-identity-manager.js';
 import { AgentCoordinator } from './communication/agent-coordinator.js';
 import { AXLClient } from './communication/axl-client.js';
 import { ReflectionEngine, type ReflectionResult } from './reflection/reflection-engine.js';
@@ -89,7 +90,7 @@ export interface AgentStepEvent {
 }
 
 export class SelfEvolvingAgent extends EventEmitter {
-  readonly name: string;
+  name: string;
   readonly description: string;
   readonly capabilities: string[];
 
@@ -102,10 +103,11 @@ export class SelfEvolvingAgent extends EventEmitter {
   protected readonly toolImprover: ToolImprover;
   protected readonly toolEvaluator: ToolEvaluator;
   private readonly state: AgentState;
-  private readonly identity?: AgentIdentityProvider;
+  private identity?: AgentIdentityProvider;
   private readonly axlClient: AXLClient;
   private readonly axlEnabled: boolean;
   private axlReady?: Promise<void>;
+  private ensAutoDetect?: Promise<ENSIdentityManager | null>;
   private coordinator?: AgentCoordinator;
   // Serialises concurrent tool-stat writes so two parallel tasks can't both
   // read usageCount=N, both write N+1, and lose one increment.
@@ -162,6 +164,10 @@ export class SelfEvolvingAgent extends EventEmitter {
     if (this.axlEnabled) {
       this.axlReady = this.initializeAXL();
     }
+
+    if (!this.identity && zeroGPrivateKey) {
+      this.ensAutoDetect = this.autoDetectEnsIdentity(zeroGPrivateKey, zeroGBlockchainRpc);
+    }
   }
 
   override on(eventName: 'step', listener: (event: AgentStepEvent) => void): this;
@@ -187,6 +193,7 @@ export class SelfEvolvingAgent extends EventEmitter {
   }
 
   async publishProfile(toolRegistryHash = ''): Promise<void> {
+    await this.ensureIdentityReady();
     if (!this.identity) return;
 
     await this.identity.setProfile(this.createAgentProfile(toolRegistryHash));
@@ -199,6 +206,7 @@ export class SelfEvolvingAgent extends EventEmitter {
     let strategyDecision: StrategyDecision | undefined;
 
     try {
+      await this.ensureIdentityReady();
       this.emitStep({ type: 'search', message: 'Searching for existing tool...', data: { task } });
 
       const tools = await this.registry.searchTools(task.description);
@@ -602,6 +610,38 @@ export class SelfEvolvingAgent extends EventEmitter {
         message: `Experience save failed (original error will still be thrown): ${this.getErrorMessage(saveError)}`,
         data: { error: saveError }
       });
+    }
+  }
+
+  private async autoDetectEnsIdentity(privateKey: string, rpcUrl?: string): Promise<ENSIdentityManager | null> {
+    try {
+      const detected = await ENSIdentityManager.autoDetect(privateKey, rpcUrl);
+      if (detected && detected.hasEnsNameConfigured()) {
+        this.identity = detected;
+        if (!this.name || this.name === 'agent') {
+          this.name = detected.ensName;
+        }
+        this.emitStep({
+          type: 'search',
+          message: `ENS auto-detected: ${detected.ensName} (wallet: ${detected.getWalletAddress()})`,
+          data: { ensName: detected.ensName, walletAddress: detected.getWalletAddress() }
+        });
+        return detected;
+      }
+      return null;
+    } catch (error) {
+      this.emitStep({
+        type: 'error',
+        message: `ENS auto-detection skipped (no name found or RPC error): ${this.getErrorMessage(error)}`,
+        data: { error }
+      });
+      return null;
+    }
+  }
+
+  private async ensureIdentityReady(): Promise<void> {
+    if (this.ensAutoDetect) {
+      await this.ensAutoDetect;
     }
   }
 
