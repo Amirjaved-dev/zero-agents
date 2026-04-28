@@ -1,5 +1,6 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { downloadFromZeroG, uploadToZeroG } from './zero-g.js';
 
 export interface Tool {
@@ -48,6 +49,10 @@ interface IndexPointerFile {
 export interface ToolRegistryOptions {
   indexPointerPath?: string;
   zeroGPrivateKey?: string;
+  /** Storage backend. Defaults to 0G when a key is configured, otherwise local JSON storage. */
+  storageMode?: 'auto' | 'zero-g' | 'local';
+  /** Local blob store path for zero-wallet development. Defaults to .zero-agent-tools.json. */
+  localStorePath?: string;
   /** How long (ms) to cache the downloaded index before re-fetching. Default 60 000. */
   indexCacheTtlMs?: number;
   /** Override the 0G EVM RPC endpoint. Defaults to the public 0G testnet. */
@@ -57,6 +62,7 @@ export interface ToolRegistryOptions {
 }
 
 const INDEX_POINTER_FILE = '.zero-agent-index.json';
+const LOCAL_STORE_FILE = '.zero-agent-tools.json';
 const DEFAULT_INDEX_CACHE_TTL_MS = 60_000;
 const MIN_TOOL_MATCH_SCORE = 0.35;
 const STOP_WORDS = new Set([
@@ -68,6 +74,8 @@ const STOP_WORDS = new Set([
 export class ToolRegistry {
   private readonly indexPointerPath: string;
   private readonly zeroGPrivateKey?: string;
+  private readonly storageMode: 'zero-g' | 'local';
+  private readonly localStorePath: string;
   private readonly indexCacheTtlMs: number;
   private readonly zeroGBlockchainRpc?: string;
   private readonly zeroGIndexerRpc?: string;
@@ -87,12 +95,16 @@ export class ToolRegistry {
     if (typeof options === 'string') {
       this.indexPointerPath = options;
       this.zeroGPrivateKey = undefined;
+      this.storageMode = 'local';
+      this.localStorePath = join(process.cwd(), LOCAL_STORE_FILE);
       this.indexCacheTtlMs = DEFAULT_INDEX_CACHE_TTL_MS;
       return;
     }
 
     this.indexPointerPath = options.indexPointerPath ?? join(process.cwd(), INDEX_POINTER_FILE);
     this.zeroGPrivateKey = options.zeroGPrivateKey;
+    this.storageMode = this.resolveStorageMode(options.storageMode, options.zeroGPrivateKey);
+    this.localStorePath = options.localStorePath ?? join(process.cwd(), LOCAL_STORE_FILE);
     this.indexCacheTtlMs = options.indexCacheTtlMs ?? DEFAULT_INDEX_CACHE_TTL_MS;
     this.zeroGBlockchainRpc = options.zeroGBlockchainRpc;
     this.zeroGIndexerRpc = options.zeroGIndexerRpc;
@@ -103,11 +115,7 @@ export class ToolRegistry {
       const toolToUpload: Tool = { ...tool };
       delete toolToUpload.rootHash;
 
-      const rootHash = await uploadToZeroG(toolToUpload, {
-        privateKey: this.zeroGPrivateKey,
-        blockchainRpc: this.zeroGBlockchainRpc,
-        indexerRpc: this.zeroGIndexerRpc
-      });
+      const rootHash = await this.persistBlob(toolToUpload);
       tool.rootHash = rootHash;
       this.toolCache.set(rootHash, { ...tool });
       await this.updateIndexUnlocked(tool);
@@ -120,7 +128,7 @@ export class ToolRegistry {
     const cached = this.toolCache.get(rootHash);
     if (cached) return cached;
 
-    const data = await downloadFromZeroG(rootHash, { indexerRpc: this.zeroGIndexerRpc });
+    const data = await this.loadBlob(rootHash);
     const tool = this.parseTool(data);
     const result = { ...tool, rootHash };
 
@@ -184,17 +192,19 @@ export class ToolRegistry {
   async importTool(tool: Tool): Promise<string> {
     return this.withIndexWriteLock(async () => {
       if (tool.rootHash) {
+        this.toolCache.set(tool.rootHash, { ...tool });
+        if (this.storageMode === 'local') {
+          const store = await this.readLocalStore();
+          store.blobs[tool.rootHash] = { ...tool, rootHash: undefined };
+          await this.writeLocalStore(store);
+        }
         await this.updateIndexUnlocked(tool);
         return tool.rootHash;
       }
 
       const toolToUpload: Tool = { ...tool };
       delete toolToUpload.rootHash;
-      const rootHash = await uploadToZeroG(toolToUpload, {
-        privateKey: this.zeroGPrivateKey,
-        blockchainRpc: this.zeroGBlockchainRpc,
-        indexerRpc: this.zeroGIndexerRpc
-      });
+      const rootHash = await this.persistBlob(toolToUpload);
       tool.rootHash = rootHash;
       this.toolCache.set(rootHash, { ...tool });
       await this.updateIndexUnlocked(tool);
@@ -231,11 +241,7 @@ export class ToolRegistry {
     });
 
     const indexFile = this.createIndexFile(metaIndex, history);
-    const indexRootHash = await uploadToZeroG(indexFile, {
-      privateKey: this.zeroGPrivateKey,
-      blockchainRpc: this.zeroGBlockchainRpc,
-      indexerRpc: this.zeroGIndexerRpc
-    });
+    const indexRootHash = await this.persistBlob(indexFile);
 
     await this.writeIndexPointer(indexRootHash);
     this.invalidateIndexCache();
@@ -271,7 +277,7 @@ export class ToolRegistry {
       return;
     }
 
-    const data = await downloadFromZeroG(indexRootHash, { indexerRpc: this.zeroGIndexerRpc });
+    const data = await this.loadBlob(indexRootHash);
     const metaIndex = new Map<string, ToolIndexEntry>();
     const history = new Map<string, string>();
 
@@ -391,7 +397,77 @@ export class ToolRegistry {
 
   private async writeIndexPointer(rootHash: string): Promise<void> {
     const pointer: IndexPointerFile = { rootHash };
+    await mkdir(dirname(this.indexPointerPath), { recursive: true });
     await writeFile(this.indexPointerPath, `${JSON.stringify(pointer, null, 2)}\n`, 'utf-8');
+  }
+
+  private resolveStorageMode(mode: ToolRegistryOptions['storageMode'], zeroGPrivateKey?: string): 'zero-g' | 'local' {
+    if (mode === 'zero-g' || mode === 'local') return mode;
+    return zeroGPrivateKey ?? process.env.ZERO_G_PRIVATE_KEY ? 'zero-g' : 'local';
+  }
+
+  private async persistBlob(data: object): Promise<string> {
+    if (this.storageMode === 'zero-g') {
+      return uploadToZeroG(data, {
+        privateKey: this.zeroGPrivateKey,
+        blockchainRpc: this.zeroGBlockchainRpc,
+        indexerRpc: this.zeroGIndexerRpc
+      });
+    }
+
+    const rootHash = this.createLocalRootHash(data);
+    const store = await this.readLocalStore();
+    store.blobs[rootHash] = data;
+    await this.writeLocalStore(store);
+    return rootHash;
+  }
+
+  private async loadBlob(rootHash: string): Promise<object> {
+    if (this.storageMode === 'local' || rootHash.startsWith('local-')) {
+      const store = await this.readLocalStore();
+      const data = store.blobs[rootHash];
+      if (!data) {
+        throw new Error(`Local tool blob not found: ${rootHash}`);
+      }
+      return data;
+    }
+
+    return downloadFromZeroG(rootHash, { indexerRpc: this.zeroGIndexerRpc });
+  }
+
+  private createLocalRootHash(data: object): string {
+    const hash = createHash('sha256').update(JSON.stringify(data)).digest('hex');
+    return `local-${hash}`;
+  }
+
+  private async readLocalStore(): Promise<{ blobs: Record<string, object> }> {
+    try {
+      const raw = await readFile(this.localStorePath, 'utf-8');
+      const parsed: unknown = JSON.parse(raw);
+      if (!this.isRecord(parsed) || !this.isRecord(parsed.blobs)) {
+        throw new Error(`Invalid local tool store: ${this.localStorePath}`);
+      }
+
+      const blobs: Record<string, object> = {};
+      for (const [key, value] of Object.entries(parsed.blobs)) {
+        if (!this.isRecord(value)) {
+          throw new Error(`Invalid local tool blob: ${key}`);
+        }
+        blobs[key] = value;
+      }
+
+      return { blobs };
+    } catch (error) {
+      if (this.isNodeError(error) && error.code === 'ENOENT') {
+        return { blobs: {} };
+      }
+      throw error;
+    }
+  }
+
+  private async writeLocalStore(store: { blobs: Record<string, object> }): Promise<void> {
+    await mkdir(dirname(this.localStorePath), { recursive: true });
+    await writeFile(this.localStorePath, `${JSON.stringify(store, null, 2)}\n`, 'utf-8');
   }
 
   private async withIndexWriteLock<T>(operation: () => Promise<T>): Promise<T> {

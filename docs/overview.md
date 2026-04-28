@@ -106,7 +106,7 @@ ToolRegistry.searchTools(query)
 | **0G Storage** | Tool bodies and the tool index are stored as content-addressed blobs. Local `.zero-agent-index.json` holds the current index root hash. |
 | **0G Compute** | Primary LLM backend for tool generation. Discovers available "chatbot" providers via the serving broker and calls `/chat/completions`. Falls back to OpenAI if unavailable. |
 | **ENS (Ethereum Name Service)** | Each agent has an ENS name (e.g. `my-agent.eth`). Text records store the agent's description, capabilities list, tool registry hash, and AXL peer ID. |
-| **Gensyn AXL** | P2P messaging layer. Agents send `task_request`, `task_result`, `tool_share`, and `ping` messages to each other by peer ID. AXLClient polls `/recv` every 500ms. |
+| **Gensyn AXL** | P2P messaging layer. Agents send `task_request`, `task_result`, `tool_share`, and `ping` messages to each other by peer ID. AXLClient polls `/messages` every 500ms, with `/recv` fallback for older local AXL builds. |
 
 ---
 

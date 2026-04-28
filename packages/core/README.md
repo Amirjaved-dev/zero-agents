@@ -84,6 +84,10 @@ SEPOLIA_RPC_URL=https://sepolia.drpc.org
 - `AXLClient`
 - `AgentCoordinator`
 
+## Local Storage Mode
+
+`ToolRegistry` uses 0G Storage when `ZERO_G_PRIVATE_KEY` or `zeroGPrivateKey` is configured. Without a key, it automatically falls back to local JSON-backed storage in `.zero-agent-tools.json`, so framework users can build and test agents before funding a wallet.
+
 ## Sandbox Note
 
 Generated tools use `isolated-vm` by default. A restricted Node `vm` fallback exists only when explicitly enabled with `new ToolSandbox({ allowUnsafeNodeVmFallback: true })`. Node `vm` is not a hard security boundary for hostile code; run untrusted generated tools inside a locked-down worker/container for production deployments.

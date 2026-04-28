@@ -100,8 +100,8 @@ export class SelfEvolvingAgent extends EventEmitter {
   private readonly state: AgentState;
   private readonly identity?: AgentIdentityProvider;
   private readonly axlClient: AXLClient;
-  private readonly axlReady: Promise<void>;
   private readonly axlEnabled: boolean;
+  private axlReady?: Promise<void>;
   private coordinator?: AgentCoordinator;
   // Serialises concurrent tool-stat writes so two parallel tasks can't both
   // read usageCount=N, both write N+1, and lose one increment.
@@ -153,9 +153,11 @@ export class SelfEvolvingAgent extends EventEmitter {
       maxGenerationAttempts
     );
     this.axlClient = new AXLClient({ axlPort: config.axlPort, pollIntervalMs: axlPollIntervalMs });
-    this.axlEnabled = config.axlEnabled ?? true;
+    this.axlEnabled = config.axlEnabled ?? false;
     this.evolutionEngine.on('step', (event) => this.emitStep(event));
-    this.axlReady = this.axlEnabled ? this.initializeAXL() : Promise.resolve();
+    if (this.axlEnabled) {
+      this.axlReady = this.initializeAXL();
+    }
   }
 
   override on(eventName: 'step', listener: (event: AgentStepEvent) => void): this;
@@ -271,7 +273,7 @@ export class SelfEvolvingAgent extends EventEmitter {
   }
 
   async collaborateWith(otherAgentEnsName: string, task: TaskRequest): Promise<TaskResult> {
-    await this.axlReady;
+    await this.ensureAXLReady();
 
     if (!this.identity?.getAXLPeerIdForName) {
       throw new Error('Agent identity provider cannot resolve AXL peer IDs');
@@ -598,6 +600,11 @@ export class SelfEvolvingAgent extends EventEmitter {
         data: { error }
       });
     }
+  }
+
+  private async ensureAXLReady(): Promise<void> {
+    this.axlReady ??= this.initializeAXL();
+    await this.axlReady;
   }
 
   private findBestTool(tools: Tool[]): Tool | null {

@@ -52,3 +52,29 @@ test('passes successful execution when output matches declared schema', async ()
   assert.equal(result.passed, true);
   assert.equal(result.score, 1);
 });
+
+test('fails when expected output is omitted and output schema is empty', async () => {
+  const evaluator = new ToolEvaluator(new ToolSandbox({ allowUnsafeNodeVmFallback: true }));
+  const tool = createTool(
+    'async function execute(params) { return 42; }',
+    {}
+  );
+
+  const result = await evaluator.evaluate(tool, [{ input: {}, description: 'empty schema smoke test' }]);
+
+  assert.equal(result.passed, false);
+  assert.equal(result.score, 0);
+});
+
+test('passes scalar output with explicit expected output even when schema is empty', async () => {
+  const evaluator = new ToolEvaluator(new ToolSandbox({ allowUnsafeNodeVmFallback: true }));
+  const tool = createTool(
+    'async function execute(params) { return 42; }',
+    {}
+  );
+
+  const result = await evaluator.evaluate(tool, [{ input: {}, expectedOutput: 42, description: 'expected scalar test' }]);
+
+  assert.equal(result.passed, true);
+  assert.equal(result.score, 1);
+});

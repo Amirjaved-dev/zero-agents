@@ -91,7 +91,7 @@ export class ToolEvaluator {
           {
             role: 'system',
             content:
-              'Generate exactly two basic test cases for a JavaScript tool. Return only JSON: {"testCases":[{"input":{},"description":"..."}]}. Omit "expectedOutput" unless you know the exact value — omitting it means any successful execution passes.'
+              'Generate exactly two basic test cases for a JavaScript tool. Return only JSON: {"testCases":[{"input":{},"expectedOutput":{},"description":"..."}]}. Include expectedOutput whenever the result is deterministic. For dynamic network/API tools, expectedOutput may be omitted, but the tool output schema must be specific enough to verify the shape.'
           },
           {
             role: 'user',
@@ -137,9 +137,9 @@ export class ToolEvaluator {
   private outputMatchesSchema(output: unknown, outputSchema: object): boolean {
     const entries = Object.entries(outputSchema);
     if (entries.length === 0) {
-      // Empty schemas are valid for scalar tools. In that case a successful
-      // execution is the only deterministic signal available without a verifier.
-      return output !== undefined;
+      // Without expected output or a declared schema, "successful execution" is
+      // too weak to approve generated code for permanent reuse.
+      return false;
     }
 
     if (!this.isRecord(output)) {

@@ -17,10 +17,12 @@ You must:
   "name": "tool_name_snake_case",
   "description": "what it does",
   "code": "async function execute(params) { ... }",
-  "schema": { "input": {}, "output": {} },
+  "schema": { "input": { "field": "type" }, "output": { "field": "type" } },
   "tags": []
 }
-4. No markdown, no backticks, pure JSON only`;
+4. The schemas must describe the real input/output fields using type strings like "string", "number", "boolean", "array", or "object"
+5. Do not return empty schemas unless the tool truly takes or returns no structured data
+6. No markdown, no backticks, pure JSON only`;
 
 interface GeneratedToolPayload {
   name: string;

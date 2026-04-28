@@ -48,17 +48,14 @@ export class AXLClient {
   }
 
   async getPeerId(): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/topology`);
-    if (!response.ok) {
-      throw new AXLError(`AXL /topology failed with status ${response.status}`);
+    const data = await this.fetchJsonFromFirstAvailable(['/info', '/topology']);
+    const peerId = this.extractPeerId(data);
+
+    if (!peerId) {
+      throw new AXLError('AXL peer info response did not include a peer ID');
     }
 
-    const data: unknown = await response.json();
-    if (!this.isRecord(data) || typeof data.our_public_key !== 'string' || data.our_public_key.length === 0) {
-      throw new AXLError('AXL /topology response did not include our_public_key');
-    }
-
-    return data.our_public_key;
+    return peerId;
   }
 
   async sendMessage(toPeerId: string, message: AgentMessage): Promise<void> {
@@ -155,21 +152,22 @@ export class AXLClient {
 
     this.isPolling = true;
     try {
-      const response = await fetch(`${this.baseUrl}/recv`);
+      const response = await this.fetchFromFirstAvailable(['/messages', '/recv']);
       if (!response.ok) return;
 
       const rawMessage = await response.text();
-      const parsedMessage = this.parseReceivedMessage(rawMessage, response.headers.get('X-From-Peer-Id') ?? '');
-      if (!parsedMessage) return;
+      const parsedMessages = this.parseReceivedMessages(rawMessage, response.headers.get('X-From-Peer-Id') ?? '');
 
-      const messageKey = this.createMessageKey(parsedMessage);
-      if (this.seenMessageKeys.has(messageKey)) return;
+      for (const parsedMessage of parsedMessages) {
+        const messageKey = this.createMessageKey(parsedMessage);
+        if (this.seenMessageKeys.has(messageKey)) continue;
 
-      this.rememberMessageKey(messageKey);
-      this.resolvePendingTask(parsedMessage.message);
+        this.rememberMessageKey(messageKey);
+        this.resolvePendingTask(parsedMessage.message);
 
-      for (const listener of this.listeners) {
-        listener(parsedMessage.message, parsedMessage.fromPeerId);
+        for (const listener of this.listeners) {
+          listener(parsedMessage.message, parsedMessage.fromPeerId);
+        }
       }
     } catch {
       return;
@@ -189,15 +187,74 @@ export class AXLClient {
     pending.resolve(message.payload as TaskResult);
   }
 
-  private parseReceivedMessage(rawMessage: string, fromPeerId: string): ParsedInboxMessage | null {
+  private async fetchJsonFromFirstAvailable(paths: string[]): Promise<unknown> {
+    const response = await this.fetchFromFirstAvailable(paths);
+    return response.json() as Promise<unknown>;
+  }
+
+  private async fetchFromFirstAvailable(paths: string[]): Promise<Response> {
+    let lastStatus = 0;
+
+    for (const path of paths) {
+      try {
+        const response = await fetch(`${this.baseUrl}${path}`);
+        if (response.ok || response.status !== 404) {
+          return response;
+        }
+        lastStatus = response.status;
+      } catch (error) {
+        if (path === paths[paths.length - 1]) {
+          throw error;
+        }
+      }
+    }
+
+    throw new AXLError(`AXL endpoints unavailable; last status ${lastStatus}`);
+  }
+
+  private extractPeerId(data: unknown): string | null {
+    if (!this.isRecord(data)) return null;
+
+    const candidates = [data.peerId, data.peer_id, data.publicKey, data.public_key, data.our_public_key];
+    const peerId = candidates.find((value) => typeof value === 'string' && value.length > 0);
+    return typeof peerId === 'string' ? peerId : null;
+  }
+
+  private parseReceivedMessages(rawMessage: string, fromPeerId: string): ParsedInboxMessage[] {
     const parsedData = this.safeJsonParse(rawMessage);
 
-    if (!this.isAgentMessage(parsedData)) return null;
+    if (this.isAgentMessage(parsedData)) {
+      return [{ message: parsedData, fromPeerId }];
+    }
 
-    return {
-      message: parsedData,
-      fromPeerId
-    };
+    if (Array.isArray(parsedData)) {
+      return parsedData.flatMap((item) => this.parseInboxItem(item, fromPeerId));
+    }
+
+    if (this.isRecord(parsedData) && Array.isArray(parsedData.messages)) {
+      return parsedData.messages.flatMap((item) => this.parseInboxItem(item, fromPeerId));
+    }
+
+    return [];
+  }
+
+  private parseInboxItem(value: unknown, fallbackPeerId: string): ParsedInboxMessage[] {
+    if (this.isAgentMessage(value)) {
+      return [{ message: value, fromPeerId: fallbackPeerId }];
+    }
+
+    if (!this.isRecord(value)) return [];
+
+    const payload = value.message ?? value.payload;
+    if (!this.isAgentMessage(payload)) return [];
+
+    const fromPeerId = typeof value.fromPeerId === 'string'
+      ? value.fromPeerId
+      : typeof value.from_peer_id === 'string'
+        ? value.from_peer_id
+        : fallbackPeerId;
+
+    return [{ message: payload, fromPeerId }];
   }
 
   private safeJsonParse(value: string): unknown {

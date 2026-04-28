@@ -11,3 +11,5 @@ build/
 .claude/settings.local.json
 local-axl/
 .zero-agent-index.json
+.zero-agent-tools.json
+.zero-agent-experiences.json

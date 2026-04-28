@@ -8,7 +8,7 @@
     "test:storage": "tsx scripts/test-storage.ts",
     "test:agent": "pnpm --filter @zero-agents/core build && tsx scripts/test-agent.ts",
     "test:evolution": "tsx scripts/test-evolution-modules.ts",
-    "test:unit": "tsx packages/core/src/__tests__/sandbox.test.ts && tsx packages/core/src/__tests__/evaluator.test.ts && tsx packages/core/src/__tests__/errors.test.ts && tsx packages/core/src/__tests__/coordinator-safety.test.ts",
+    "test:unit": "tsx packages/core/src/__tests__/sandbox.test.ts && tsx packages/core/src/__tests__/evaluator.test.ts && tsx packages/core/src/__tests__/errors.test.ts && tsx packages/core/src/__tests__/coordinator-safety.test.ts && tsx packages/core/src/__tests__/tool-registry.test.ts && tsx packages/core/src/__tests__/axl-client.test.ts",
     "build": "pnpm --filter @zero-agents/core build && pnpm --filter @zero-agents/demo-agent build && pnpm --filter @zero-agents/dashboard build",
     "dev": "pnpm -r dev"
   },

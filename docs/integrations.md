@@ -235,7 +235,7 @@ Internally this calls:
 
 `AgentCoordinator` is started automatically in the `SelfEvolvingAgent` constructor. It:
 1. Calls `axlClient.getPeerId()` and stores the result in `agent.getState().metadata.axlPeerId`
-2. Calls `axlClient.startListening(handler)` to poll `/recv` every 500 ms
+2. Calls `axlClient.startListening(handler)` to poll `/messages` every 500 ms, with `/recv` fallback for older local AXL builds
 3. Routes inbound messages:
    - `task_request` → `agent.handleTask(payload)` → sends back `task_result`
    - `tool_share` → `registry.importTool(payload)`

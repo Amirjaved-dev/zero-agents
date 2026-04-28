@@ -31,7 +31,7 @@ new SelfEvolvingAgent(config: SelfEvolvingAgentConfig | AgentConfig)
   zeroGPrivateKey: string;          // Ethereum private key (Sepolia) for 0G transactions.
   openAiKey?: string;               // Optional OpenAI fallback key.
   axlPort?: number;                 // AXL node port. Default: 9002.
-  axlEnabled?: boolean;             // Default: true. Set false for local examples without AXL.
+  axlEnabled?: boolean;             // Default: false. Set true to start AXL eagerly.
 }
 ```
 
@@ -130,14 +130,16 @@ interface EvolutionEvent {
 class ToolRegistry
 
 new ToolRegistry(indexPointerPath?: string)
-// Default path: join(process.cwd(), '.zero-agent-index.json')
+new ToolRegistry(options?: ToolRegistryOptions)
+// Default index pointer: join(process.cwd(), '.zero-agent-index.json')
+// Default storage: 0G when ZERO_G_PRIVATE_KEY is configured, otherwise local JSON.
 ```
 
 ```typescript
-// Upload tool to 0G, add to index. Returns the 0G root hash.
+// Save tool to the configured backend, add to index. Returns the root hash.
 saveTool(tool: Tool): Promise<string>
 
-// Download a tool by its 0G root hash.
+// Load a tool by root hash.
 getTool(rootHash: string): Promise<Tool>
 
 // Look up a tool by name in the index, then download it.
@@ -155,7 +157,7 @@ importTool(tool: Tool): Promise<string>
 // Return the root hash of the current index blob.
 getIndexRootHash(): Promise<string | null>
 
-// Load the full name → rootHash index map from 0G.
+// Load the full name → rootHash index map.
 loadIndex(): Promise<Map<string, string>>
 ```
 

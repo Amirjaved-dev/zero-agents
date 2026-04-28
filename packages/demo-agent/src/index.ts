@@ -27,6 +27,7 @@ export interface ResearchAgentOptions {
   axlPort?: number;
   registryPath?: string;
   experienceMemoryPath?: string;
+  axlEnabled?: boolean;
   allowOfflineStorage?: boolean;
 }
 
@@ -55,6 +56,7 @@ export class ResearchAgent extends SelfEvolvingAgent {
       zeroGPrivateKey: options.zeroGPrivateKey ?? process.env.ZERO_G_PRIVATE_KEY ?? '',
       openAiKey: options.openAiKey ?? process.env.OPENAI_API_KEY,
       axlPort: options.axlPort,
+      axlEnabled: options.axlEnabled ?? true,
       experienceMemoryPath: options.experienceMemoryPath
     };
 
