@@ -41,13 +41,22 @@ export class EvolutionEngine extends EventEmitter {
   }
 
   async generateTool(taskDescription: string, sampleParams: object = {}): Promise<Tool> {
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(
         () => reject(new Error(`Tool generation timed out after ${this.evolutionTimeoutMs}ms`)),
         this.evolutionTimeoutMs
-      )
-    );
-    return Promise.race([this.runGenerationLoop(taskDescription, sampleParams), timeoutPromise]);
+      );
+      timeout.unref?.();
+    });
+
+    try {
+      return await Promise.race([this.runGenerationLoop(taskDescription, sampleParams), timeoutPromise]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   private async runGenerationLoop(taskDescription: string, sampleParams: object): Promise<Tool> {
