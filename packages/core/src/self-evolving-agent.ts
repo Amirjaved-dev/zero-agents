@@ -31,6 +31,8 @@ export interface SelfEvolvingAgentConfig {
   axlPollIntervalMs?: number;
   /** Timeout (ms) for LLM test-case generation per tool. Default: 30 000. */
   testCaseTimeoutMs?: number;
+  /** Development-only fallback for environments where isolated-vm is unavailable. Default: false. */
+  allowUnsafeNodeVmFallback?: boolean;
   /** Override the 0G EVM RPC endpoint. Defaults to the public 0G testnet. */
   zeroGBlockchainRpc?: string;
   /** Override the 0G Storage indexer endpoint. Defaults to the public 0G testnet indexer. */
@@ -51,6 +53,8 @@ export interface AgentConfig {
   axlPollIntervalMs?: number;
   /** Local JSON path for task experience memory. Defaults to .zero-agent-experiences.json. */
   experienceMemoryPath?: string;
+  /** Development-only fallback for environments where isolated-vm is unavailable. Default: false. */
+  allowUnsafeNodeVmFallback?: boolean;
 }
 
 export interface AgentState {
@@ -138,7 +142,7 @@ export class SelfEvolvingAgent extends EventEmitter {
       zeroGIndexerRpc
     });
     const generator = new ToolGenerator({ zeroGPrivateKey, openAiKey, zeroGBlockchainRpc });
-    this.sandbox = new ToolSandbox();
+    this.sandbox = new ToolSandbox({ allowUnsafeNodeVmFallback: config.allowUnsafeNodeVmFallback });
     this.reflectionEngine = new ReflectionEngine();
     this.experienceMemory = new ExperienceMemory({ filePath: config.experienceMemoryPath });
     this.strategyAdapter = new StrategyAdapter();
@@ -638,7 +642,7 @@ export class SelfEvolvingAgent extends EventEmitter {
       tool.usageCount = nextUsageCount;
       tool.successRate = nextSuccesses / nextUsageCount;
 
-      await this.registry.saveTool(tool);
+      await this.registry.updateToolStats(tool);
 
       if (this.identity) {
         try {

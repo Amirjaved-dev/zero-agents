@@ -35,6 +35,7 @@ interface ToolIndexEntry {
   description: string;
   tags: string[];
   successRate: number;
+  usageCount: number;
 }
 
 interface ToolIndexMeta {
@@ -140,7 +141,7 @@ export class ToolRegistry {
     await this.loadIndexData();
     const entry = this.cachedMetaIndex?.get(name);
     if (!entry) return null;
-    return this.getTool(entry.rootHash);
+    return this.getIndexedTool(entry);
   }
 
   async getIndexRootHash(): Promise<string | null> {
@@ -178,15 +179,24 @@ export class ToolRegistry {
       .sort((a, b) => b.score - a.score || b.entry.successRate - a.entry.successRate);
 
     // Download only the tools that matched (typically 1-3)
-    return Promise.all(scored.map(({ entry }) => this.getTool(entry.rootHash)));
+    return Promise.all(scored.map(({ entry }) => this.getIndexedTool(entry)));
   }
 
   async exportTools(): Promise<Tool[]> {
     await this.loadIndexData();
     if (!this.cachedMetaIndex) return [];
     return Promise.all(
-      Array.from(this.cachedMetaIndex.values(), (entry) => this.getTool(entry.rootHash))
+      Array.from(this.cachedMetaIndex.values(), (entry) => this.getIndexedTool(entry))
     );
+  }
+
+  private async getIndexedTool(entry: ToolIndexEntry): Promise<Tool> {
+    const tool = await this.getTool(entry.rootHash);
+    return {
+      ...tool,
+      successRate: entry.successRate,
+      usageCount: entry.usageCount
+    };
   }
 
   async importTool(tool: Tool): Promise<string> {
@@ -216,6 +226,38 @@ export class ToolRegistry {
     return this.withIndexWriteLock(() => this.updateIndexUnlocked(tool));
   }
 
+  async updateToolStats(tool: Tool): Promise<string> {
+    return this.withIndexWriteLock(async () => {
+      if (!tool.rootHash) {
+        throw new Error('Cannot update tool stats without a rootHash');
+      }
+
+      await this.loadIndexData();
+
+      const metaIndex = this.cachedMetaIndex ?? new Map<string, ToolIndexEntry>();
+      const history = this.cachedHistory ?? new Map<string, string>();
+      const existing = metaIndex.get(tool.name);
+
+      metaIndex.set(tool.name, {
+        rootHash: tool.rootHash,
+        name: existing?.name ?? tool.name,
+        description: existing?.description ?? tool.description,
+        tags: existing?.tags ?? tool.tags,
+        successRate: tool.successRate,
+        usageCount: tool.usageCount
+      });
+
+      const indexFile = this.createIndexFile(metaIndex, history);
+      const indexRootHash = await this.persistBlob(indexFile);
+
+      await this.writeIndexPointer(indexRootHash);
+      this.toolCache.set(tool.rootHash, { ...tool });
+      this.invalidateIndexCache();
+
+      return indexRootHash;
+    });
+  }
+
   private async updateIndexUnlocked(tool: Tool): Promise<string> {
     if (!tool.rootHash) {
       throw new Error('Cannot update tool index without a rootHash');
@@ -237,7 +279,8 @@ export class ToolRegistry {
       name: tool.name,
       description: tool.description,
       tags: tool.tags,
-      successRate: tool.successRate
+      successRate: tool.successRate,
+      usageCount: tool.usageCount
     });
 
     const indexFile = this.createIndexFile(metaIndex, history);
@@ -297,7 +340,10 @@ export class ToolRegistry {
 
       // New format: value is a ToolIndexEntry object
       if (this.isToolIndexEntry(value)) {
-        metaIndex.set(key, value);
+        metaIndex.set(key, {
+          ...value,
+          usageCount: value.usageCount ?? 0
+        });
         continue;
       }
 
@@ -308,7 +354,8 @@ export class ToolRegistry {
           name: key,
           description: '',
           tags: [],
-          successRate: 0
+          successRate: 0,
+          usageCount: 0
         });
         continue;
       }
@@ -530,7 +577,8 @@ export class ToolRegistry {
       typeof value.description === 'string' &&
       Array.isArray(value.tags) &&
       value.tags.every((t) => typeof t === 'string') &&
-      typeof value.successRate === 'number'
+      typeof value.successRate === 'number' &&
+      (value.usageCount === undefined || typeof value.usageCount === 'number')
     );
   }
 
