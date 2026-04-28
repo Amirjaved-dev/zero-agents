@@ -19,7 +19,7 @@ Node.js 20+ is required by the package `engines` field. `isolated-vm` is a nativ
 ```ts
 import { ToolSandbox } from '@zero-agents/core';
 
-const sandbox = new ToolSandbox();
+const sandbox = new ToolSandbox({ allowUnsafeNodeVmFallback: true });
 const result = await sandbox.run(
   `async function execute(params) {
     return { sum: params.a + params.b };
@@ -29,6 +29,8 @@ const result = await sandbox.run(
 
 console.log(result.output);
 ```
+
+The fallback is for local smoke tests only. Production callers should install and verify `isolated-vm` instead of relying on Node's `vm` module.
 
 ### Agent with 0G/ENS
 
@@ -48,6 +50,7 @@ const agent = new SelfEvolvingAgent({
   openAiKey: process.env.OPENAI_API_KEY,
   identity,
   axlEnabled: false,
+  allowUnsafeNodeVmFallback: process.env.NODE_ENV !== 'production',
 });
 
 agent.on('step', (event) => {
