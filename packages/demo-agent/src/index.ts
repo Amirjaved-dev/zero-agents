@@ -84,6 +84,7 @@ export class ResearchAgent extends SelfEvolvingAgent {
         similarExperiences
       });
       strategy = strategyDecision.strategy;
+      let resultStrategyDecision = strategyDecision;
       this.emitDemoStep('strategy', `Strategy selected: ${strategyDecision.strategy}`, strategyDecision);
       this.emitDemoStep('strategy', `Reason: ${strategyDecision.reason}`, strategyDecision);
 
@@ -100,9 +101,14 @@ export class ResearchAgent extends SelfEvolvingAgent {
       let wasGenerated = false;
 
       if (!tool || tool.successRate <= 0.5 || strategyDecision.strategy !== 'reuse_existing_tool') {
-        strategy = !tool || tool.successRate <= 0.5 || strategyDecision.strategy === 'ask_another_agent'
-          ? 'generate_new_tool'
-          : strategyDecision.strategy;
+        strategy = 'generate_new_tool';
+        resultStrategyDecision = this.createActualStrategyDecision(
+          strategyDecision,
+          'generate_new_tool',
+          !tool
+            ? 'No reusable demo tool was available, so a new tool was generated.'
+            : `Selected strategy "${strategyDecision.strategy}" required a fresh generated tool before execution.`
+        );
         this.emitDemoStep('miss', 'MISS: no reusable tool found in the registry.', { task });
 
         const hasLLMKey = !!(process.env.OPENAI_API_KEY ?? process.env.ZERO_G_PRIVATE_KEY);
@@ -153,7 +159,7 @@ export class ResearchAgent extends SelfEvolvingAgent {
         executionTimeMs: Date.now() - startedAt
       };
 
-      this.applyStrategyMetadata(result, strategyDecision);
+      this.applyStrategyMetadata(result, resultStrategyDecision);
       await this.reflectAndSaveExperience(task, result, strategy);
       this.emitDemoStep('done', 'Task complete.', result);
       return result;

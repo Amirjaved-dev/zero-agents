@@ -128,7 +128,8 @@ async function main(): Promise<void> {
   const researchAgent = new ResearchAgent({
     name: 'research-agent.eth',
     identity: researchIdentity,
-    registryPath: join(tempDir, 'research-agent-index.json')
+    registryPath: join(tempDir, 'research-agent-index.json'),
+    experienceMemoryPath: join(tempDir, 'research-agent-experiences.json')
   });
   researchAgent.on('step', (event) => logEvent(researchAgent.name, event));
 
@@ -163,7 +164,8 @@ async function main(): Promise<void> {
   const plannerAgent = new ResearchAgent({
     name: 'planner-agent.eth',
     identity: plannerIdentity,
-    registryPath: join(tempDir, 'planner-agent-index.json')
+    registryPath: join(tempDir, 'planner-agent-index.json'),
+    experienceMemoryPath: join(tempDir, 'planner-agent-experiences.json')
   });
   plannerAgent.on('step', (event) => logEvent(plannerAgent.name, event));
   await plannerAgent.publishProfile(firstRootHash);
