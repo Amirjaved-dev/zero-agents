@@ -62,7 +62,7 @@ A **TaskResult** is what `handleTask()` returns:
 
 ```typescript
 interface TaskResult {
-  output: any;              // The value returned by the tool function
+  output: unknown;          // The value returned by the tool function
   toolUsed: string;         // Tool name that produced the result
   wasGenerated: boolean;    // true if tool was created this run, false if from registry
   executionTimeMs: number;  // Wall time for the full handleTask() call
@@ -140,17 +140,17 @@ The feedback from each failed attempt is appended to the next LLM prompt, so the
 
 Source: `packages/core/src/sandbox/tool-sandbox.ts`
 
-Executes tool code in isolation. Two strategies, selected automatically:
+Executes tool code in isolation. It prefers `isolated-vm`; the Node.js `vm` fallback is only used when `isolated-vm` cannot load and the caller explicitly enables `allowUnsafeNodeVmFallback`.
 
 | Strategy | When Used | Memory | Timeout | Globals |
 |----------|-----------|--------|---------|---------|
-| `isolated-vm` | Default | 16 MB | 3 s | `Math`, `JSON`, `Array`, `String`, `Date` only |
-| `Node.js vm` | Tool code contains `fetch()` | Host process | 10 s | `fetch` allowed |
+| `isolated-vm` | Default | 16 MB | 3 s | Safe builtins plus limited `fetch` bridge |
+| `Node.js vm` | Development fallback only | Host process | Caller timeout | Safe builtins plus limited `fetch` |
 
 ```typescript
 interface SandboxResult {
   success: boolean;
-  output: any;
+  output: unknown;
   error?: string;
   executionTimeMs: number;
 }
@@ -160,7 +160,7 @@ class ToolSandbox {
 }
 ```
 
-**Security**: `require`, `process`, `fs`, `Function`, `eval` are all blocked in isolated-vm mode. Tools that need HTTP use `fetch` and automatically fall through to the Node.js vm strategy.
+**Security**: `require`, `process`, `fs`, `Function`, and `eval` are shadowed in the sandbox source. Tools that need HTTP use the provided limited `fetch` bridge. Node's `vm` fallback is not a production security boundary.
 
 ---
 

@@ -19,6 +19,14 @@ Task
 
 This repository contains the reusable framework package, a demo research agent, and a minimal Next.js dashboard package.
 
+Current readiness: `@zero-agents/core` is suitable for external alpha developers. The zero-wallet developer path covers sandbox execution, local tool registry storage, reflection, experience memory, and the offline demo. Live 0G Compute, 0G Storage, ENS, and AXL flows are implemented as opt-in integrations and require credentials or local services before they can be considered ready in a specific environment.
+
+Run the zero-wallet framework validation from the repository root:
+
+```bash
+pnpm validate:framework
+```
+
 ---
 
 ## What is ZeroAgent?

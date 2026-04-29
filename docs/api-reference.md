@@ -52,6 +52,9 @@ new SelfEvolvingAgent(config: SelfEvolvingAgentConfig | AgentConfig)
 // Run a task. Returns the result and metadata about tool used.
 agent.handleTask(task: TaskRequest): Promise<TaskResult>
 
+// Convenience wrapper around handleTask().
+agent.run(task: string | TaskRequest): Promise<TaskResult>
+
 // Delegate a task to another agent over AXL (requires identity provider).
 agent.collaborateWith(otherAgentEnsName: string, task: TaskRequest): Promise<TaskResult>
 
@@ -65,6 +68,13 @@ agent.evolve(): Promise<void>
 agent.getName(): string
 agent.getDescription(): string
 agent.getState(): AgentState
+agent.getRegistry(): ToolRegistry
+agent.getEvolutionEngine(): EvolutionEngine
+agent.getExperienceMemory(): ExperienceMemory
+agent.getStrategyAdapter(): StrategyAdapter
+agent.getToolImprover(): ToolImprover
+agent.getCoordinator(): AgentCoordinator | null
+agent.dispose(): void
 ```
 
 #### Events
@@ -75,9 +85,9 @@ agent.on('step', (event: AgentStepEvent) => void)
 
 ```typescript
 interface AgentStepEvent {
-  type: 'search' | 'miss' | 'generating' | 'sandboxing' | 'evaluating' | 'saving' | 'executing' | 'done' | 'error';
+  type: 'search' | 'miss' | 'strategy' | 'generating' | 'sandboxing' | 'evaluating' | 'saving' | 'executing' | 'reflecting' | 'done' | 'error';
   message: string;
-  data?: any;
+  data?: unknown;
 }
 ```
 
@@ -116,7 +126,7 @@ Events: `'step'` — emits `EvolutionEvent` at each phase:
 interface EvolutionEvent {
   type: 'generating' | 'sandboxing' | 'evaluating' | 'saving';
   message: string;
-  data?: any;
+  data?: unknown;
 }
 ```
 
@@ -202,15 +212,17 @@ run(code: string, params: object): Promise<SandboxResult>
 ```typescript
 interface SandboxResult {
   success: boolean;
-  output: any;
+  output: unknown;
   error?: string;
   executionTimeMs: number;
 }
 ```
 
-Execution strategy is chosen automatically:
-- **isolated-vm** (default) — 16 MB, 3 s timeout, no `require`/`process`/`fs`/`eval`.
-- **Node.js vm** (fallback when code contains `fetch`) — host process memory, 10 s timeout, `fetch` allowed.
+Execution strategy:
+
+- **isolated-vm** is preferred by default, with a 16 MB isolate memory limit and a 3 second default timeout.
+- `fetch` is provided inside `isolated-vm` through a limited host bridge.
+- **Node.js vm** is used only when `isolated-vm` cannot load and `allowUnsafeNodeVmFallback: true` is set. It is a development fallback, not a production security boundary.
 
 ---
 

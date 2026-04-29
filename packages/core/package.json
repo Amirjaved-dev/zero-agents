@@ -51,9 +51,11 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm clean && tsc",
     "dev": "tsc --watch",
     "prepack": "pnpm build",
+    "validate:install": "pnpm build && tsx scripts/validate-install.ts",
     "test:unit": "tsx src/__tests__/sandbox.test.ts && tsx src/__tests__/evaluator.test.ts && tsx src/__tests__/errors.test.ts && tsx src/__tests__/coordinator-safety.test.ts && tsx src/__tests__/tool-registry.test.ts && tsx src/__tests__/axl-client.test.ts && tsx src/__tests__/agent-strategy.test.ts"
   },
   "dependencies": {

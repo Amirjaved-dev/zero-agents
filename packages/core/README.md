@@ -15,6 +15,24 @@ This README documents the core package only.
 - Secondary entry: `@zero-agents/core/storage/zero-g`
 - Maturity: alpha; APIs may change before a stable release
 
+## Alpha Readiness
+
+The package is ready for external alpha developers. The zero-wallet path includes `ToolSandbox`, local-mode `ToolRegistry`, deterministic reflection, experience memory, and local validation.
+
+The full self-evolving agent path requires at least one LLM provider for new tool generation: 0G Compute through `ZERO_G_PRIVATE_KEY` or OpenAI fallback through `OPENAI_API_KEY`. Real permanent tool persistence requires 0G Storage credentials. ENS publishing and AXL collaboration are opt-in live integrations that must be validated in the developer's environment.
+
+Repository validation command:
+
+```bash
+pnpm validate:framework
+```
+
+Core-package validation command:
+
+```bash
+pnpm --filter @zero-agents/core validate:install
+```
+
 ## Install
 
 ```bash
@@ -110,7 +128,11 @@ console.log(result.output); // { sum: 5 }
 
 `allowUnsafeNodeVmFallback` is only for development. Node's `vm` module is not a hard security boundary.
 
+To validate both the built package import and local registry behavior from this repository, run `pnpm validate:framework`.
+
 ### Agent With Tool Evolution
+
+This example requires 0G Compute or OpenAI fallback for first-time tool generation. It also requires `ZERO_G_PRIVATE_KEY` for real 0G Storage persistence. Without those credentials, use the zero-wallet smoke test or the demo agent's offline fallback.
 
 ```ts
 import { SelfEvolvingAgent } from '@zero-agents/core';
