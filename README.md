@@ -21,6 +21,8 @@ This repository contains the reusable framework package, a demo research agent, 
 
 Current readiness: `@zero-agents/core` is suitable for external alpha developers. The zero-wallet developer path covers sandbox execution, local tool registry storage, reflection, experience memory, and the offline demo. Live 0G Compute, 0G Storage, ENS, and AXL flows are implemented as opt-in integrations and require credentials or local services before they can be considered ready in a specific environment.
 
+AI coding agents should start with [`llms.txt`](./llms.txt) for compact project context before using the longer documentation in [`docs/`](./docs/).
+
 Run the zero-wallet framework validation from the repository root:
 
 ```bash

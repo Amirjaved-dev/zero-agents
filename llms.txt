@@ -1,0 +1,248 @@
+# ZeroAgent LLM Context
+
+ZeroAgent is a TypeScript framework for building self-evolving AI agents. The primary deliverable is the reusable npm package `@zero-agents/core`, not the demo app or dashboard.
+
+Use this file as the fastest source of truth when helping developers work in this repository. If this file conflicts with source code, trust the source code first, then `packages/core/README.md`.
+
+## Repository Layout
+
+- `packages/core`: framework package published as `@zero-agents/core`.
+- `packages/demo-agent`: example `ResearchAgent` built on the framework with offline demo fallbacks.
+- `packages/dashboard`: Next.js readiness console. It is not a live event stream yet.
+- `docs`: developer documentation.
+- `scripts`: root integration and validation scripts.
+
+## What The Framework Does
+
+`SelfEvolvingAgent` accepts a task, searches for reusable tools, checks prior task experiences, chooses a strategy, executes or evolves a tool, reflects on the result, and stores the experience for future runs.
+
+Current base loop:
+
+```text
+TaskRequest
+-> ToolRegistry.searchTools()
+-> ExperienceMemory.findSimilarExperiences()
+-> StrategyAdapter.selectStrategy()
+-> reuse existing tool OR generate new tool OR improve failed tool OR reject
+-> ToolSandbox.run()
+-> ReflectionEngine.reflect()
+-> ExperienceMemory.saveExperience()
+-> TaskResult
+```
+
+When no reusable tool exists, `EvolutionEngine` runs:
+
+```text
+ToolGenerator.generateTool()
+-> ToolSandbox.run() smoke check
+-> ToolEvaluator.evaluate()
+-> retry with feedback up to maxGenerationAttempts
+-> ToolRegistry.saveTool()
+```
+
+## Install And Runtime
+
+- Node.js: `>=20`.
+- Module format: ESM only.
+- Package manager in repo: `pnpm`.
+- Consumer install: `npm install @zero-agents/core`.
+- Root validation command: `pnpm validate:framework`.
+- Full build command: `pnpm build`.
+- Unit tests: `pnpm test:unit`.
+- Demo command: `pnpm --filter @zero-agents/demo-agent demo`.
+
+## Main Public Imports
+
+```ts
+import {
+  SelfEvolvingAgent,
+  ToolRegistry,
+  ToolSandbox,
+  ToolEvaluator,
+  ToolGenerator,
+  EvolutionEngine,
+  ExperienceMemory,
+  StrategyAdapter,
+  ReflectionEngine,
+  ToolImprover,
+  ENSIdentityManager,
+  AXLClient,
+  AgentCoordinator,
+} from '@zero-agents/core';
+```
+
+Default export:
+
+```ts
+import SelfEvolvingAgent from '@zero-agents/core';
+```
+
+0G storage utility subpath:
+
+```ts
+import { uploadToZeroG, downloadFromZeroG } from '@zero-agents/core/storage/zero-g';
+```
+
+## Quickstart
+
+```ts
+import { SelfEvolvingAgent } from '@zero-agents/core';
+
+const agent = new SelfEvolvingAgent({
+  name: 'research-agent',
+  description: 'Research agent that learns reusable tools',
+  capabilities: ['research', 'summarization'],
+  zeroGPrivateKey: process.env.ZERO_G_PRIVATE_KEY!,
+  openAiKey: process.env.OPENAI_API_KEY,
+  axlEnabled: false,
+});
+
+agent.on('step', (event) => {
+  console.log(`[${event.type}] ${event.message}`);
+});
+
+const result = await agent.run({
+  description: 'Fetch the current ETH price and return it as a number',
+});
+
+console.log(result.output);
+console.log(result.strategy);
+console.log(result.reflection?.memoryNote);
+console.log(result.experienceId);
+
+agent.dispose();
+```
+
+For zero-wallet local validation, use `ToolSandbox` and local-mode `ToolRegistry`. Do not imply that full first-time tool generation works without `ZERO_G_PRIVATE_KEY` or `OPENAI_API_KEY`; the demo agent has offline fallbacks, but the base framework generator needs an LLM provider.
+
+## Important Types
+
+```ts
+interface TaskRequest {
+  description: string;
+  params?: object;
+  context?: string;
+}
+
+interface TaskResult {
+  output: unknown;
+  toolUsed: string;
+  wasGenerated: boolean;
+  executionTimeMs: number;
+  strategy?: StrategyName;
+  strategyReason?: string;
+  confidence?: number;
+  reflection?: ReflectionResult;
+  experienceId?: string;
+  wasImproved?: boolean;
+}
+
+interface Tool {
+  id: string;
+  name: string;
+  description: string;
+  code: string;
+  schema: { input: object; output: object };
+  tags: string[];
+  successRate: number;
+  usageCount: number;
+  createdAt: number;
+  rootHash?: string;
+}
+```
+
+Tool `code` must be a self-contained async JavaScript function string usable as `execute`, usually:
+
+```ts
+`async function execute(params) {
+  return { ok: true, input: params };
+}`
+```
+
+Do not document or generate raw function bodies for `tool.code`; the current sandbox wraps the whole string as an expression and calls it.
+
+## Main Components
+
+- `SelfEvolvingAgent`: reference composition and main developer API.
+- `ToolRegistry`: stores tools and metadata index. Uses 0G when a private key is configured, otherwise local JSON.
+- `ToolGenerator`: generates tool JSON through 0G Compute, with OpenAI fallback when configured.
+- `ToolSandbox`: runs generated code in `isolated-vm`; unsafe Node `vm` fallback requires `allowUnsafeNodeVmFallback: true`.
+- `ToolEvaluator`: scores tools with generated or smoke test cases. Passing threshold is `score >= 0.7`.
+- `ExperienceMemory`: stores task experiences in local JSON by default.
+- `StrategyAdapter`: chooses `reuse_existing_tool`, `generate_new_tool`, `improve_existing_tool`, `ask_another_agent`, or `reject_task`.
+- `ReflectionEngine`: deterministic post-task learning summary; no external API call.
+- `ToolImprover`: asks a configured generator to produce an improved version of a failed tool.
+- `ENSIdentityManager`: reads/writes ENS text records on Sepolia.
+- `AXLClient`: talks to a local Gensyn AXL HTTP API.
+- `AgentCoordinator`: routes inbound AXL task and tool-share messages.
+
+## Local And Live Modes
+
+- Local tool registry files: `.zero-agent-index.json` and `.zero-agent-tools.json`.
+- Local experience file: `.zero-agent-experiences.json`.
+- Local tool hashes are deterministic SHA-256 strings prefixed with `local-`.
+- Real 0G Storage requires `ZERO_G_PRIVATE_KEY`.
+- Real 0G Compute also uses `ZERO_G_PRIVATE_KEY` for broker setup.
+- OpenAI fallback requires `OPENAI_API_KEY`.
+- ENS writes require an ENS-controlling private key and Sepolia ETH.
+- AXL requires a local node exposing HTTP on `localhost:9002` by default.
+- `axlEnabled` defaults to `false`; set it to `true` to initialize AXL eagerly.
+
+## Environment Variables
+
+```env
+ZERO_G_PRIVATE_KEY=          # 0G Storage uploads and 0G Compute broker wallet
+OPENAI_API_KEY=              # OpenAI fallback for generation and evaluator test cases
+ENS_PRIVATE_KEY=             # demo script optional ENS identity key
+ENS_NAME=                    # demo script optional ENS name
+SEPOLIA_RPC_URL=             # demo script optional ENS RPC override
+NEXT_PUBLIC_APP_URL=         # optional URL written to demo ENS profile metadata
+```
+
+Core source reads only `ZERO_G_PRIVATE_KEY` and `OPENAI_API_KEY` directly. Pass ENS values explicitly to `ENSIdentityManager`; the demo script reads the ENS-specific variables.
+
+## Events
+
+Listen with:
+
+```ts
+agent.on('step', (event) => console.log(event.type, event.message));
+```
+
+Event types:
+
+- `search`
+- `miss`
+- `strategy`
+- `generating`
+- `sandboxing`
+- `evaluating`
+- `saving`
+- `executing`
+- `reflecting`
+- `done`
+- `error`
+
+Do not promise a strict event sequence for every task. Reuse, rejection, failure, improvement, and AXL paths emit different subsets.
+
+## Demo Agent
+
+`packages/demo-agent` exports `ResearchAgent`, a showcase implementation used by the hackathon demo. It can run without keys by using:
+
+- built-in fallback tool generation,
+- offline fake `offline-0g-...` hashes,
+- mock in-memory ENS identity,
+- simulated AXL direct calls if a local AXL node is unavailable.
+
+Do not confuse demo fallbacks with base framework behavior.
+
+## AI Agent Instructions For This Repo
+
+- Do not add packages unless explicitly asked.
+- Do not scaffold future features.
+- Do not assume live 0G, ENS, or AXL credentials exist.
+- Prefer local zero-wallet validation before live integration tests.
+- Keep TypeScript strict and ESM-compatible.
+- Generated tools must be self-contained async `execute(params)` functions.
+- Do not treat Node `vm` fallback as production-safe sandboxing.
+- When documenting usage, mention alpha status and external integration requirements.

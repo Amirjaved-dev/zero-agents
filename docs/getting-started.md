@@ -215,6 +215,7 @@ The live self-evolving path depends on external systems: 0G Compute or OpenAI fo
 
 ## Next Steps
 
+- If you are using an AI coding agent, start with [`../llms.txt`](../llms.txt) for compact project context.
 - Read [Core Concepts](./core-concepts.md) to understand how tools and the evolution loop work.
 - Read [API Reference](./api-reference.md) for the full method signatures.
 - Read [Integrations](./integrations.md) to configure 0G Compute, ENS, and AXL.
