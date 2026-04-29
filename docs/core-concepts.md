@@ -12,10 +12,10 @@ interface Tool {
   id: string;           // UUID
   name: string;         // Unique, slug-like (e.g. "fetch_hn_stories")
   description: string;  // Human-readable purpose
-  code: string;         // JS async function body as a string
+  code: string;         // Complete async execute(params) function as a string
   schema: {
-    input: object;      // JSON Schema for input params
-    output: object;     // JSON Schema for expected output
+    input: object;      // Schema-like input shape using type strings
+    output: object;     // Schema-like output shape using type strings
   };
   tags: string[];       // Keywords for search matching
   successRate: number;  // 0–1, updated after each execution
@@ -27,21 +27,23 @@ interface Tool {
 
 ### Tool Code Format
 
-The LLM is prompted to produce the function body only — no `function` keyword, no wrapping. The sandbox wraps it automatically. Example:
+Generated and imported tool code must be a complete async JavaScript function string usable as `execute`. Example:
 
 ```javascript
 // This is what `tool.code` contains:
-const response = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json');
-const ids = await response.json();
-const top3 = ids.slice(0, 3);
-const stories = await Promise.all(top3.map(async (id) => {
-  const r = await fetch(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
-  return r.json();
-}));
-return { stories, summary: `Top 3: ${stories.map(s => s.title).join(', ')}` };
+async function execute(params) {
+  const response = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json');
+  const ids = await response.json();
+  const top3 = ids.slice(0, params.limit ?? 3);
+  const stories = await Promise.all(top3.map(async (id) => {
+    const r = await fetch(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
+    return r.json();
+  }));
+  return { stories, summary: `Top ${stories.length}: ${stories.map((s) => s.title).join(', ')}` };
+}
 ```
 
-The sandbox injects `params` (the `TaskRequest.params` object) into scope, so the function can reference `params.query`, `params.limit`, etc.
+The sandbox calls `execute(params)`, where `params` is the `TaskRequest.params` object.
 
 ---
 
@@ -54,7 +56,7 @@ A **TaskRequest** describes work for the agent to perform:
 interface TaskRequest {
   description: string;  // Plain English description — used for tool search + LLM prompt
   params?: object;      // Runtime arguments injected into the tool's scope
-  context?: string;     // Additional context for the LLM during tool generation
+  context?: string;     // Optional caller context for custom agent flows
 }
 ```
 
@@ -62,10 +64,16 @@ A **TaskResult** is what `handleTask()` returns:
 
 ```typescript
 interface TaskResult {
-  output: unknown;          // The value returned by the tool function
-  toolUsed: string;         // Tool name that produced the result
-  wasGenerated: boolean;    // true if tool was created this run, false if from registry
-  executionTimeMs: number;  // Wall time for the full handleTask() call
+  output: unknown;               // The value returned by the tool function
+  toolUsed: string;              // Tool name that produced the result
+  wasGenerated: boolean;         // true if tool was created this run, false if from registry
+  executionTimeMs: number;       // Wall time for the full handleTask() call
+  strategy?: StrategyName;       // Strategy actually used for this task
+  strategyReason?: string;       // Why that strategy was selected
+  confidence?: number;           // Strategy confidence from 0 to 1
+  reflection?: ReflectionResult; // Structured post-task learning data
+  experienceId?: string;         // Saved local experience record id
+  wasImproved?: boolean;         // true if a failed existing tool was improved and used
 }
 ```
 
@@ -86,8 +94,21 @@ interface SelfEvolvingAgentConfig {
   zeroGPrivateKey: string;         // Ethereum private key for 0G transactions
   openAiKey?: string;              // Fallback LLM key
   axlPort?: number;                // AXL node port (default: 9002)
+  registryPath?: string;           // Local index pointer path
+  axlEnabled?: boolean;            // Default: false
+  maxGenerationAttempts?: number;  // Default: 3
+  evolutionTimeoutMs?: number;     // Default: 120000
+  axlPollIntervalMs?: number;      // Default: 500
+  testCaseTimeoutMs?: number;      // Default: 30000
+  allowUnsafeNodeVmFallback?: boolean;
+  zeroGBlockchainRpc?: string;
+  zeroGIndexerRpc?: string;
+  indexCacheTtlMs?: number;
+  experienceMemoryPath?: string;
 }
 ```
+
+`AgentConfig` is the minimal offline/test config. It omits 0G and OpenAI keys and supports local registry, local experience memory, AXL options, and `allowUnsafeNodeVmFallback`.
 
 ### State
 
@@ -173,14 +194,14 @@ Generates test cases with an LLM and scores the tool against them.
 ```typescript
 interface TestCase {
   input: object;      // Params to pass to the tool
-  expectedOutput: object; // Expected return value shape
+  expectedOutput?: unknown; // Optional exact expected output for deterministic tests
+  description: string;
 }
 
 interface TestCaseResult {
   testCase: TestCase;
   passed: boolean;
-  actual?: any;
-  error?: string;
+  result: SandboxResult;
 }
 
 interface EvalResult {
@@ -195,7 +216,7 @@ class ToolEvaluator {
 }
 ```
 
-If `OPENAI_API_KEY` is not set, the evaluator falls back to a single smoke test using the tool's own schema as the test input.
+If `OPENAI_API_KEY` is not set, the evaluator falls back to a single smoke test using the tool's input schema to create sample params.
 
 ---
 
@@ -203,16 +224,18 @@ If `OPENAI_API_KEY` is not set, the evaluator falls back to a single smoke test 
 
 Source: `packages/core/src/storage/tool-registry.ts`
 
-Manages the tool index: a local pointer file (`.zero-agent-index.json`) that stores the 0G root hash of the current index blob.
+Manages the tool index: a local pointer file (`.zero-agent-index.json`) that stores the current index root hash. In local mode, hashes are deterministic `local-...` SHA-256 values stored in `.zero-agent-tools.json`. In 0G mode, hashes point to 0G Storage blobs.
 
 ```typescript
 class ToolRegistry {
   async saveTool(tool: Tool): Promise<string>         // Upload + index; returns rootHash
   async getTool(rootHash: string): Promise<Tool>      // Download by hash
   async getToolByName(name: string): Promise<Tool | null>
+  async getToolHistory(name: string): Promise<ToolHistory>
   async searchTools(query: string): Promise<Tool[]>   // Fuzzy match by name/description/tags
   async exportTools(): Promise<Tool[]>                // All tools in the registry
   async importTool(tool: Tool): Promise<string>       // Add an externally sourced tool
+  async updateToolStats(tool: Tool): Promise<string>
   async getIndexRootHash(): Promise<string | null>    // Current index root hash
   async loadIndex(): Promise<Map<string, string>>     // name → rootHash map
 }
@@ -288,7 +311,7 @@ Deduplication: tracks up to 1,000 seen message keys (`fromPeerId:type:requestId:
 
 Source: `packages/core/src/communication/agent-coordinator.ts`
 
-Wires together `AXLClient` and `SelfEvolvingAgent`. Started automatically inside the agent constructor.
+Wires together `AXLClient` and `SelfEvolvingAgent`. `SelfEvolvingAgent` starts it automatically only when `axlEnabled: true`; otherwise create and start it manually if you need raw AXL routing.
 
 Message routing:
 

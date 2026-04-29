@@ -26,7 +26,7 @@ packages/
   demo-agent/    # @zero-agents/demo-agent — example implementation
   dashboard/     # Next.js UI for visualizing agent activity
 scripts/         # Integration test runners
-local-axl/       # Gensyn AXL node (git submodule)
+  local-axl/       # Optional local Gensyn AXL checkout, if present
 ```
 
 ---
@@ -39,15 +39,18 @@ local-axl/       # Gensyn AXL node (git submodule)
 │                                                                  │
 │  handleTask()                                                    │
 │    │                                                             │
-│    ├─ ToolRegistry.searchTools()  ──► 0G Storage (read)         │
+│    ├─ ToolRegistry.searchTools()  ──► local/0G tool index       │
+│    ├─ ExperienceMemory.findSimilarExperiences()                 │
+│    ├─ StrategyAdapter.selectStrategy()                          │
 │    │                                                             │
 │    ├─ [cache miss] EvolutionEngine.evolve()                      │
 │    │     ├─ ToolGenerator   ──► 0G Compute / OpenAI             │
 │    │     ├─ ToolSandbox     ──► isolated-vm / Node.js vm        │
-│    │     ├─ ToolEvaluator   ──► OpenAI (generates test cases)   │
-│    │     └─ ToolRegistry.saveTool() ──► 0G Storage (write)      │
+│    │     ├─ ToolEvaluator   ──► OpenAI test cases / smoke test  │
+│    │     └─ ToolRegistry.saveTool() ──► local/0G storage        │
 │    │                                                             │
 │    └─ ToolSandbox.run()  ──► returns output                     │
+│          └─ ReflectionEngine + ExperienceMemory save learning   │
 │                                                                  │
 │  publishProfile()  ──► ENSIdentityManager ──► ENS text records  │
 │  collaborateWith() ──► AXLClient ──► Gensyn AXL P2P             │
@@ -66,6 +69,10 @@ local-axl/       # Gensyn AXL node (git submodule)
 | `ToolSandbox` | `packages/core/src/sandbox/tool-sandbox.ts` | Isolated execution of generated code |
 | `ToolEvaluator` | `packages/core/src/sandbox/tool-evaluator.ts` | LLM test generation + scoring |
 | `ToolRegistry` | `packages/core/src/storage/tool-registry.ts` | Local index + 0G Storage CRUD |
+| `ExperienceMemory` | `packages/core/src/memory/experience-memory.ts` | Local task experience records |
+| `StrategyAdapter` | `packages/core/src/evolution/strategy-adapter.ts` | Deterministic strategy selection before acting |
+| `ReflectionEngine` | `packages/core/src/reflection/reflection-engine.ts` | Deterministic post-task learning summary |
+| `ToolImprover` | `packages/core/src/tools/tool-improver.ts` | Generates improved tool candidates after failures |
 | `ENSIdentityManager` | `packages/core/src/identity/ens-identity-manager.ts` | On-chain identity via ENS text records |
 | `AXLClient` | `packages/core/src/communication/axl-client.ts` | P2P messaging over Gensyn AXL |
 | `AgentCoordinator` | `packages/core/src/communication/agent-coordinator.ts` | Routes inbound AXL messages to handlers |
@@ -120,19 +127,23 @@ agent.on('step', (event: AgentStepEvent) => {
 });
 ```
 
-Event types (in order of emission for a cache-miss task):
+Event types that may be emitted across reuse, cache-miss, improvement, rejection, and failure paths:
 
 ```
 search     → looking up registry
 miss       → no matching tool found
+strategy   → selecting behavior from tools and experience memory
 generating → ToolGenerator called
 sandboxing → running generated code
 evaluating → ToolEvaluator scoring
-saving     → uploading to 0G
+saving     → saving a tool, index, or experience
 executing  → running final tool
+reflecting → recording post-task learning data
 done       → TaskResult ready
 error      → something failed
 ```
+
+Do not depend on a strict sequence for every task. A reuse hit, rejected task, failed tool, or improvement path emits a different subset.
 
 ---
 

@@ -6,7 +6,7 @@
 
 **SDK:** `@0gfoundation/0g-ts-sdk`
 **Source:** `packages/core/src/storage/zero-g.ts`
-**Network:** Sepolia testnet
+**Network:** 0G testnet
 **RPC:** `https://evmrpc-testnet.0g.ai`
 **Indexer:** `https://indexer-storage-testnet-turbo.0g.ai`
 
@@ -15,18 +15,24 @@
 | Data | Who Writes | Who Reads |
 |------|-----------|-----------|
 | Individual tool blobs (JSON) | `ToolRegistry.saveTool()` | `ToolRegistry.getTool()` |
-| Tool index blob (name → rootHash map) | `ToolRegistry.updateIndex()` | `ToolRegistry.loadIndex()` |
+| Tool index blob (tool metadata plus root hashes) | `ToolRegistry.updateIndex()` / `saveTool()` | `ToolRegistry.loadIndex()` / `searchTools()` |
 
 ### How the Index Works
 
 ```
-.zero-agent-index.json          (local file, tracked in git-ignored)
-  └── rootHash: "0xABC..."      (points to 0G blob)
+.zero-agent-index.json          (local pointer file, git-ignored)
+  └── rootHash: "0xABC..."      (points to current index blob)
 
 0G blob at 0xABC...             (the index)
   └── {
-        "fetch_hn_stories":   "0x111...",
-        "summarize_text":     "0x222...",
+        "fetch_hn_stories": {
+          "rootHash": "0x111...",
+          "name": "fetch_hn_stories",
+          "description": "Fetches top Hacker News stories",
+          "tags": ["hacker-news", "fetch"],
+          "successRate": 1,
+          "usageCount": 3
+        },
         "_meta": { updatedAt: 1700000000000, count: 2 }
       }
 
@@ -34,7 +40,7 @@
   └── { id, name, description, code, schema, tags, ... }
 ```
 
-Every `saveTool()` call uploads the tool, then uploads a new index blob, then updates the local pointer file.
+Every `saveTool()` call stores the tool, stores a new index blob, then updates the local pointer file. Without a configured private key, `ToolRegistry` defaults to local JSON storage in `.zero-agent-tools.json` and returns deterministic `local-...` hashes.
 
 ### Configuration
 
@@ -62,6 +68,8 @@ const tool = await registry.getTool(rootHash);
 const tools = await registry.searchTools('fetch web page');
 ```
 
+`new ToolRegistry()` uses 0G only when `ZERO_G_PRIVATE_KEY` is configured. For a hard failure when 0G credentials are missing, use `new ToolRegistry({ storageMode: 'zero-g' })`.
+
 ---
 
 ## 0G Compute
@@ -87,20 +95,23 @@ The system prompt instructs the LLM to return **only JSON**, no markdown:
 {
   "name": "fetch_hn_stories",
   "description": "Fetches top Hacker News stories",
-  "code": "const r = await fetch('...');\nreturn await r.json();",
+  "code": "async function execute(params) { const r = await fetch('...'); return await r.json(); }",
   "schema": {
-    "input": { "type": "object", "properties": {} },
-    "output": { "type": "object" }
+    "input": { "limit": "number" },
+    "output": { "stories": "array", "summary": "string" }
   },
   "tags": ["hacker-news", "fetch", "stories"]
 }
 ```
 
-Returned `code` is a raw async function body — no `async function` wrapper.
+Returned `code` is a complete self-contained async function string named `execute`.
 
 ### Configuration
 
 ```env
+# Required for 0G Compute broker setup
+ZERO_G_PRIVATE_KEY=your_ethereum_private_key_no_0x_prefix
+
 # Optional — enables OpenAI fallback
 OPENAI_API_KEY=sk-...
 ```
@@ -114,7 +125,7 @@ No additional 0G Compute config is needed; the broker is discovered automaticall
 **Library:** `viem`
 **Source:** `packages/core/src/identity/ens-identity-manager.ts`
 **Network:** Sepolia testnet
-**Resolver:** `0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5`
+**Resolver:** resolved dynamically from the ENS name before reads and writes.
 
 ### What Gets Written
 
@@ -186,10 +197,9 @@ AXL (Agent eXchange Layer) is Gensyn's peer-to-peer messaging network. Each agen
 ### AXL Node Setup
 
 ```bash
-# Clone the AXL repo (already included as local-axl/ submodule)
-cd local-axl
+# Start a local Gensyn AXL node that exposes HTTP on localhost:9002.
+# If you keep an AXL checkout in local-axl/, follow that repo's setup instructions.
 
-# Follow AXL node setup instructions in local-axl/README.md
 # The node exposes HTTP endpoints at localhost:9002
 ```
 
@@ -233,7 +243,7 @@ Internally this calls:
 
 ### Receiving Tasks
 
-`AgentCoordinator` is started automatically in the `SelfEvolvingAgent` constructor. It:
+When `SelfEvolvingAgent` is constructed with `axlEnabled: true`, it initializes AXL and starts an `AgentCoordinator`. It:
 1. Calls `axlClient.getPeerId()` and stores the result in `agent.getState().metadata.axlPeerId`
 2. Calls `axlClient.startListening(handler)` to poll `/messages` every 500 ms, with `/recv` fallback for older local AXL builds
 3. Routes inbound messages:

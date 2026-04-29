@@ -31,7 +31,17 @@ new SelfEvolvingAgent(config: SelfEvolvingAgentConfig | AgentConfig)
   zeroGPrivateKey: string;          // Ethereum private key (Sepolia) for 0G transactions.
   openAiKey?: string;               // Optional OpenAI fallback key.
   axlPort?: number;                 // AXL node port. Default: 9002.
+  registryPath?: string;            // Local index pointer path.
   axlEnabled?: boolean;             // Default: false. Set true to start AXL eagerly.
+  maxGenerationAttempts?: number;   // Default: 3.
+  evolutionTimeoutMs?: number;      // Default: 120000.
+  axlPollIntervalMs?: number;       // Default: 500.
+  testCaseTimeoutMs?: number;       // Default: 30000.
+  allowUnsafeNodeVmFallback?: boolean;
+  zeroGBlockchainRpc?: string;
+  zeroGIndexerRpc?: string;
+  indexCacheTtlMs?: number;
+  experienceMemoryPath?: string;
 }
 ```
 
@@ -42,7 +52,11 @@ new SelfEvolvingAgent(config: SelfEvolvingAgentConfig | AgentConfig)
   name: string;
   description?: string;
   axlPort?: number;
+  registryPath?: string;
   axlEnabled?: boolean;
+  axlPollIntervalMs?: number;
+  experienceMemoryPath?: string;
+  allowUnsafeNodeVmFallback?: boolean;
 }
 ```
 
@@ -106,7 +120,9 @@ new EvolutionEngine(
   generator?: ToolGenerator,
   sandbox?: ToolSandbox,
   evaluator?: ToolEvaluator,
-  registry?: ToolRegistry
+  registry?: ToolRegistry,
+  evolutionTimeoutMs?: number,
+  maxGenerationAttempts?: number
 )
 ```
 
@@ -146,6 +162,18 @@ new ToolRegistry(options?: ToolRegistryOptions)
 ```
 
 ```typescript
+interface ToolRegistryOptions {
+  indexPointerPath?: string;
+  zeroGPrivateKey?: string;
+  storageMode?: 'auto' | 'zero-g' | 'local';
+  localStorePath?: string;
+  indexCacheTtlMs?: number;
+  zeroGBlockchainRpc?: string;
+  zeroGIndexerRpc?: string;
+}
+```
+
+```typescript
 // Save tool to the configured backend, add to index. Returns the root hash.
 saveTool(tool: Tool): Promise<string>
 
@@ -154,6 +182,9 @@ getTool(rootHash: string): Promise<Tool>
 
 // Look up a tool by name in the index, then download it.
 getToolByName(name: string): Promise<Tool | null>
+
+// Return current and previous root hashes for a named tool.
+getToolHistory(name: string): Promise<ToolHistory>
 
 // Search registry by query string. Returns ranked list (best match first).
 searchTools(query: string): Promise<Tool[]>
@@ -164,11 +195,115 @@ exportTools(): Promise<Tool[]>
 // Add a tool from an external source (another agent's tool_share).
 importTool(tool: Tool): Promise<string>
 
+// Update only usageCount/successRate metadata for an existing rootHash.
+updateToolStats(tool: Tool): Promise<string>
+
 // Return the root hash of the current index blob.
 getIndexRootHash(): Promise<string | null>
 
 // Load the full name → rootHash index map.
 loadIndex(): Promise<Map<string, string>>
+```
+
+---
+
+### `ExperienceMemory`
+
+> `packages/core/src/memory/experience-memory.ts`
+
+Stores task experience records in local JSON by default, with optional best-effort 0G persistence when configured directly.
+
+```typescript
+class ExperienceMemory
+
+new ExperienceMemory(options?: ExperienceMemoryOptions)
+```
+
+```typescript
+interface ExperienceMemoryOptions {
+  filePath?: string;
+  zeroG?: ZeroGStorageOptions;
+  persistToZeroG?: boolean;
+}
+```
+
+```typescript
+saveExperience(experience: ExperienceInput): Promise<ExperienceRecord>
+listExperiences(agentName?: string): Promise<ExperienceRecord[]>
+findSimilarExperiences(task: string, limit?: number): Promise<ExperienceRecord[]>
+clearExperiences(): Promise<void>
+```
+
+---
+
+### `StrategyAdapter`
+
+> `packages/core/src/evolution/strategy-adapter.ts`
+
+Deterministically selects a pre-task strategy from the available tools and similar prior experiences.
+
+```typescript
+class StrategyAdapter
+
+selectStrategy(input: StrategyAdapterInput): StrategyDecision
+```
+
+```typescript
+type StrategyName =
+  | 'reuse_existing_tool'
+  | 'generate_new_tool'
+  | 'improve_existing_tool'
+  | 'ask_another_agent'
+  | 'reject_task';
+
+interface StrategyDecision {
+  strategy: StrategyName;
+  confidence: number;
+  reason: string;
+  selectedToolName?: string;
+  selectedToolId?: string;
+}
+```
+
+---
+
+### `ReflectionEngine`
+
+> `packages/core/src/reflection/reflection-engine.ts`
+
+Produces deterministic post-task learning data. It does not call an external API.
+
+```typescript
+class ReflectionEngine
+
+reflect(input: ReflectionInput): ReflectionResult
+```
+
+```typescript
+interface ReflectionResult {
+  success: boolean;
+  qualityScore: number;
+  whatWorked: string;
+  whatFailed: string;
+  improvementNeeded: boolean;
+  memoryNote: string;
+  recommendedStrategy: RecommendedStrategy;
+}
+```
+
+---
+
+### `ToolImprover`
+
+> `packages/core/src/tools/tool-improver.ts`
+
+Uses a configured generator to create an improved candidate for a failed or low-quality tool. It does not save or evaluate the candidate by itself.
+
+```typescript
+class ToolImprover
+
+new ToolImprover(options?: ToolImproverOptions)
+improveTool(input: ToolImproverInput): Promise<ImprovedToolCandidate>
 ```
 
 ---
@@ -180,7 +315,16 @@ loadIndex(): Promise<Map<string, string>>
 ```typescript
 class ToolGenerator
 
-new ToolGenerator()
+new ToolGenerator(options?: ToolGeneratorOptions | boolean)
+```
+
+```typescript
+interface ToolGeneratorOptions {
+  fallbackToOpenAI?: boolean;
+  zeroGPrivateKey?: string;
+  openAiKey?: string;
+  zeroGBlockchainRpc?: string;
+}
 ```
 
 ```typescript
@@ -200,13 +344,21 @@ The returned tool has `successRate: 0` and `usageCount: 0` and is not yet saved 
 ```typescript
 class ToolSandbox
 
-new ToolSandbox()
+new ToolSandbox(options?: ToolSandboxOptions)
 ```
 
 ```typescript
-// Execute tool code string with params injected into scope.
+interface ToolSandboxOptions {
+  allowUnsafeNodeVmFallback?: boolean;
+  allowedFetchHostnames?: string[];
+  maxFetchResponseBytes?: number;
+}
+```
+
+```typescript
+// Execute an async execute(params) tool code string.
 // Returns SandboxResult whether or not execution succeeds.
-run(code: string, params: object): Promise<SandboxResult>
+run(code: string, params: object, timeoutMs?: number): Promise<SandboxResult>
 ```
 
 ```typescript
@@ -233,12 +385,12 @@ Execution strategy:
 ```typescript
 class ToolEvaluator
 
-new ToolEvaluator(sandbox?: ToolSandbox)
+new ToolEvaluator(sandbox?: ToolSandbox, openAiKey?: string, testCaseTimeoutMs?: number)
 ```
 
 ```typescript
 // Generate test cases via LLM, run tool against them, return scored result.
-evaluate(tool: Tool): Promise<EvalResult>
+evaluate(tool: Tool, testCases?: TestCase[]): Promise<EvalResult>
 ```
 
 ```typescript
@@ -251,14 +403,14 @@ interface EvalResult {
 
 interface TestCase {
   input: object;
-  expectedOutput: object;
+  expectedOutput?: unknown;
+  description: string;
 }
 
 interface TestCaseResult {
   testCase: TestCase;
   passed: boolean;
-  actual?: any;
-  error?: string;
+  result: SandboxResult;
 }
 ```
 
@@ -270,18 +422,29 @@ interface TestCaseResult {
 
 ```typescript
 interface ENSIdentityManagerConfig {
-  ensName: string;        // e.g. 'my-agent.eth'
+  ensName?: string;       // e.g. 'my-agent.eth'; optional for auto-detect flow
   privateKey: string;     // Ethereum private key for signing ENS writes
+  rpcUrl?: string;        // Defaults to https://sepolia.drpc.org
 }
 
 class ENSIdentityManager implements AgentIdentityProvider
 
 new ENSIdentityManager(config: ENSIdentityManagerConfig)
+ENSIdentityManager.autoDetect(privateKey: string, rpcUrl?: string): Promise<ENSIdentityManager | null>
 ```
 
 ```typescript
 // Read all text records for the ENS name.
 getProfile(): Promise<AgentProfile | null>
+
+// Detect primary ENS name for the wallet.
+detectPrimaryName(): Promise<string | null>
+
+// Return configured wallet address.
+getWalletAddress(): string
+
+// True when an ENS name is configured.
+hasEnsNameConfigured(): boolean
 
 // Write all text records for the ENS name (batched).
 setProfile(profile: AgentProfile): Promise<void>
@@ -322,7 +485,9 @@ discoverAgentsByCapability(capability: string, agentNames: string[]): Promise<st
 
 ```typescript
 interface AXLClientConfig {
-  axlPort?: number;   // Default: 9002
+  axlPort?: number;         // Default: 9002
+  taskTimeoutMs?: number;   // Default: 30000
+  pollIntervalMs?: number;  // Default: 500
 }
 
 class AXLClient
@@ -342,6 +507,12 @@ sendTask(toPeerId: string, task: TaskRequest): Promise<TaskResult>
 
 // Register a listener for inbound messages. Starts polling if not already running.
 startListening(onMessage: (msg: AgentMessage, fromPeerId: string) => void): Promise<void>
+
+// Remove a listener.
+stopListening(onMessage: (msg: AgentMessage, fromPeerId: string) => void): void
+
+// Stop polling and reject pending task requests.
+stop(): void
 ```
 
 ```typescript
@@ -362,9 +533,9 @@ interface AgentMessage {
 
 ```typescript
 interface AgentCoordinatorConfig {
-  agent: SelfEvolvingAgent;
+  agent: { getName(): string; handleTask(task: TaskRequest): Promise<TaskResult> };
   registry: ToolRegistry;
-  axlClient: AXLClient;
+  axlClient?: AXLClient;
 }
 
 class AgentCoordinator
@@ -375,6 +546,9 @@ new AgentCoordinator(config: AgentCoordinatorConfig)
 ```typescript
 // Start listening for AXL messages and routing them.
 start(): Promise<void>
+
+// Stop listening for AXL messages.
+stop(): void
 
 // Send all registry tools to another peer as tool_share messages.
 shareToolLibrary(toPeerId: string): Promise<void>
@@ -388,13 +562,21 @@ shareToolLibrary(toPeerId: string): Promise<void>
 // All exported from @zero-agents/core
 
 export type { Tool }                  // from storage/tool-registry
+export type { ToolRegistryOptions, ToolHistory }
+export type { ExperienceRecord }      // from memory/experience-memory
 export type { SandboxResult }         // from sandbox/tool-sandbox
+export type { ToolSandboxOptions }
 export type { EvalResult, TestCase, TestCaseResult }  // from sandbox/tool-evaluator
+export type { ToolGeneratorOptions }
+export type { ImprovedToolCandidate, OriginalToolForImprovement, ToolImproverInput, ToolImproverOptions }
 export type { AgentConfig, AgentState, AgentStepEvent, SelfEvolvingAgentConfig, TaskRequest, TaskResult }
 export type { EvolutionEvent }        // from evolution-engine
+export type { StrategyAdapterInput, StrategyDecision, StrategyName }
+export type { ReflectionInput, ReflectionResult, RecommendedStrategy }
 export type { AgentIdentityProvider, AgentProfile, ENSIdentityManagerConfig }
 export type { AgentMessage, AXLClientConfig }
 export type { AgentCoordinatorConfig }
+export type { ZeroGStorageOptions }
 ```
 
 ---
@@ -409,10 +591,10 @@ Not exported from the main index, but used internally by `ToolRegistry`. Call di
 import { uploadToZeroG, downloadFromZeroG } from '@zero-agents/core/storage/zero-g';
 
 // Serialize `data` to JSON and upload. Returns root hash string.
-uploadToZeroG(data: object): Promise<string>
+uploadToZeroG(data: object, options?: ZeroGStorageOptions): Promise<string>
 
 // Download by root hash and deserialize. Returns plain object.
-downloadFromZeroG(rootHash: string): Promise<object>
+downloadFromZeroG(rootHash: string, options?: Pick<ZeroGStorageOptions, 'indexerRpc'>): Promise<object>
 ```
 
-Requires `ZERO_G_PRIVATE_KEY` in environment.
+Uploads require `ZERO_G_PRIVATE_KEY` or `options.privateKey`. Downloads only require a reachable indexer.

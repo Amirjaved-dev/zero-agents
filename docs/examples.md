@@ -122,7 +122,7 @@ const agentB = new SelfEvolvingAgent({
   axlEnabled: true,
 });
 
-// agentB is now listening for inbound tasks (AgentCoordinator starts automatically)
+// agentB is now listening for inbound tasks because axlEnabled is true.
 await agentB.publishProfile(); // writes AXL peer ID to ENS
 console.log('Agent B ready');
 ```
