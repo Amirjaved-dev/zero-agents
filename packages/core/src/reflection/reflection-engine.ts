@@ -25,15 +25,36 @@ export interface ReflectionResult {
   recommendedStrategy: RecommendedStrategy;
 }
 
+export interface ReflectionEngineOptions {
+  /** Object keys that make a result count as failure. Default: ['error']. Empty disables this check. */
+  errorOutputKeys?: string[];
+  beforeReflection?: (input: ReflectionInput) => void;
+  afterReflection?: (result: ReflectionResult, input: ReflectionInput) => void;
+}
+
 export class ReflectionEngine {
+  private readonly errorOutputKeys: string[];
+  private readonly beforeReflection?: (input: ReflectionInput) => void;
+  private readonly afterReflection?: (result: ReflectionResult, input: ReflectionInput) => void;
+
+  constructor(options: ReflectionEngineOptions = {}) {
+    this.errorOutputKeys = options.errorOutputKeys ?? ['error'];
+    this.beforeReflection = options.beforeReflection;
+    this.afterReflection = options.afterReflection;
+  }
+
   reflect(input: ReflectionInput): ReflectionResult {
-    const success = input.error === undefined && input.result !== undefined;
-    const qualityScore = this.getQualityScore(input, success);
-    const recommendedStrategy = this.getRecommendedStrategy(input, success);
+    this.beforeReflection?.(input);
+    const structuredError = this.getStructuredOutputError(input.result);
+    const error = input.error ?? structuredError;
+    const success = error === undefined && input.result !== undefined;
+    const inputForScoring = error === undefined ? input : { ...input, error };
+    const qualityScore = this.getQualityScore(inputForScoring, success);
+    const recommendedStrategy = this.getRecommendedStrategy(inputForScoring, success);
     const agentPrefix = input.agentName ? `${input.agentName} ` : '';
     const taskSummary = input.task.trim() || 'unspecified task';
 
-    return {
+    const result = {
       success,
       qualityScore,
       whatWorked: success
@@ -41,13 +62,25 @@ export class ReflectionEngine {
         : 'No successful result was produced.',
       whatFailed: success
         ? 'No failure detected.'
-        : this.describeError(input.error),
+        : this.describeError(error),
       improvementNeeded: !success || qualityScore < 70,
       memoryNote: success
         ? `For task "${taskSummary}", strategy "${input.strategy}" produced a usable result${input.toolUsed ? ` with tool "${input.toolUsed}"` : ''}.`
-        : `For task "${taskSummary}", strategy "${input.strategy}" failed: ${this.describeError(input.error)}`,
+        : `For task "${taskSummary}", strategy "${input.strategy}" failed: ${this.describeError(error)}`,
       recommendedStrategy,
     };
+    this.afterReflection?.(result, inputForScoring);
+    return result;
+  }
+
+  private getStructuredOutputError(output: unknown): unknown | undefined {
+    if (this.errorOutputKeys.length === 0 || output === null || typeof output !== 'object' || Array.isArray(output)) {
+      return undefined;
+    }
+
+    const record = output as Record<string, unknown>;
+    const key = this.errorOutputKeys.find((candidate) => record[candidate] !== undefined && record[candidate] !== null);
+    return key ? record[key] : undefined;
   }
 
   private getQualityScore(input: ReflectionInput, success: boolean): number {

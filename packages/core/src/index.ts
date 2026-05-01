@@ -139,8 +139,8 @@ export type { ExperienceRecord } from './memory/experience-memory.js';
 /** Options for `uploadToZeroG` / `downloadFromZeroG` (private key, RPC overrides). */
 export type { ZeroGStorageOptions } from './storage/zero-g.js';
 
-/** Constructor options for {@link ToolGenerator}. */
-export type { ToolGeneratorOptions } from './generation/tool-generator.js';
+/** Constructor options and extension types for {@link ToolGenerator}. */
+export type { GeneratedToolPayload, ToolGenerationMessage, ToolGenerationPromptInput, ToolGeneratorOptions } from './generation/tool-generator.js';
 
 /** Candidate produced by {@link ToolImprover} before saving or evaluation. */
 export type { ImprovedToolCandidate, OriginalToolForImprovement, ToolImproverInput, ToolImproverOptions } from './tools/tool-improver.js';
@@ -152,7 +152,7 @@ export type { SandboxResult, ToolSandboxOptions } from './sandbox/tool-sandbox.j
 export type { EvalResult, TestCase, TestCaseResult } from './sandbox/tool-evaluator.js';
 
 /** Full config for {@link SelfEvolvingAgent} (with 0G credentials). */
-export type { SelfEvolvingAgentConfig } from './self-evolving-agent.js';
+export type { SelfEvolvingAgentConfig, SelfEvolvingAgentHooks } from './self-evolving-agent.js';
 
 /** Minimal config for {@link SelfEvolvingAgent} (offline / testing). */
 export type { AgentConfig } from './self-evolving-agent.js';
@@ -176,7 +176,7 @@ export type { EvolutionEvent } from './evolution-engine.js';
 export type { StrategyAdapterInput, StrategyDecision, StrategyName } from './evolution/strategy-adapter.js';
 
 /** Input and output types for post-task reflection. */
-export type { ReflectionInput, ReflectionResult, RecommendedStrategy } from './reflection/reflection-engine.js';
+export type { ReflectionEngineOptions, ReflectionInput, ReflectionResult, RecommendedStrategy } from './reflection/reflection-engine.js';
 
 /** Interface for identity providers (ENS, mock, etc.). */
 export type { AgentIdentityProvider, AgentProfile } from './identity/index.js';

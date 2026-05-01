@@ -8,7 +8,7 @@ This README documents the core package only.
 
 ## Status
 
-- Package version: `0.1.0`
+- Package version: `0.1.1`
 - Runtime: Node.js `>=20`
 - Module format: ESM only
 - Main entry: `@zero-agents/core`
@@ -211,6 +211,13 @@ interface SelfEvolvingAgentConfig {
   zeroGIndexerRpc?: string;
   indexCacheTtlMs?: number;
   experienceMemoryPath?: string;
+  registry?: ToolRegistryOptions;
+  sandbox?: ToolSandboxOptions;
+  toolGeneration?: ToolGeneratorOptions;
+  reflection?: ReflectionEngineOptions;
+  shouldExecute?: (task: TaskRequest) => boolean | Promise<boolean>;
+  directResponse?: (task: TaskRequest, agent: SelfEvolvingAgent) => unknown | Promise<unknown>;
+  hooks?: SelfEvolvingAgentHooks;
 }
 ```
 
@@ -226,8 +233,58 @@ interface AgentConfig {
   axlPollIntervalMs?: number;
   experienceMemoryPath?: string;
   allowUnsafeNodeVmFallback?: boolean;
+  registry?: ToolRegistryOptions;
+  sandbox?: ToolSandboxOptions;
+  toolGeneration?: ToolGeneratorOptions;
+  reflection?: ReflectionEngineOptions;
+  shouldExecute?: (task: TaskRequest) => boolean | Promise<boolean>;
+  directResponse?: (task: TaskRequest, agent: SelfEvolvingAgent) => unknown | Promise<unknown>;
+  hooks?: SelfEvolvingAgentHooks;
 }
 ```
+
+### Extension Points
+
+Applications can customize the framework without monkey-patching prototypes:
+
+```ts
+const agent = new SelfEvolvingAgent({
+  name: 'pan-agent',
+  registry: {
+    storageMode: 'local',
+    indexPointerPath: '.pan-tool-index.json',
+    localStorePath: '.pan-tools.json',
+  },
+  toolGeneration: {
+    systemPromptAppend: 'Handle missing params and API failures safely.',
+    runtimeHints: [
+      'Use fetch instead of Node APIs.',
+      'Do not use require, process, fs, net, or child_process.',
+      'Return { error: string } for recoverable API failures.',
+    ],
+  },
+  sandbox: {
+    timeoutMs: 15000,
+    errorOutputKeys: ['error'],
+  },
+  reflection: {
+    errorOutputKeys: ['error'],
+  },
+  shouldExecute: (task) => !['hi', 'hello'].includes(task.description.toLowerCase()),
+  hooks: {
+    shouldCreateTool: (task) => task.description.trim().length > 8,
+    afterSandboxRun: (result) => {
+      console.log('sandbox result', result.success);
+    },
+  },
+});
+```
+
+`ToolGenerator` accepts tolerant LLM output shapes such as `{ tool: ... }`, `{ generatedTool: ... }`, `{ result: ... }`, arrays, `functionCode`, and `execute`. For stricter app-specific behavior, pass `toolGeneration.normalizeGeneratedTool` or `hooks.normalizeGeneratedTool`.
+
+`ToolSandbox` treats returned objects like `{ error: 'API failed' }` as failed executions by default. Set `sandbox.errorOutputKeys: []` to disable this semantic failure check.
+
+The built-in agent gate answers trivial greetings and capability questions directly so they do not create useless tools. Override with `shouldExecute` and `directResponse` for product-specific routing.
 
 Defaults:
 

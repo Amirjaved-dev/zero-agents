@@ -19,12 +19,22 @@ export interface ToolSandboxOptions {
   allowedFetchHostnames?: string[];
   /** Maximum response body size copied back into the sandbox. Default: 1 MiB. */
   maxFetchResponseBytes?: number;
+  /** Object keys that make a returned tool output count as failure. Default: ['error']. Empty disables this check. */
+  errorOutputKeys?: string[];
+  /** Default execution timeout for run() when no timeout argument is provided. Default: 3000. */
+  timeoutMs?: number;
+  beforeSandboxRun?: (toolCode: string, params: object) => void | Promise<void>;
+  afterSandboxRun?: (result: SandboxResult) => void | Promise<void>;
 }
 
 export class ToolSandbox {
   private readonly allowUnsafeNodeVmFallback: boolean;
   private readonly allowedFetchHostnames: Set<string> | null;
   private readonly maxFetchResponseBytes: number;
+  private readonly errorOutputKeys: string[];
+  private readonly timeoutMs: number;
+  private readonly beforeSandboxRun?: (toolCode: string, params: object) => void | Promise<void>;
+  private readonly afterSandboxRun?: (result: SandboxResult) => void | Promise<void>;
 
   constructor(options: ToolSandboxOptions = {}) {
     this.allowUnsafeNodeVmFallback = options.allowUnsafeNodeVmFallback ?? false;
@@ -32,44 +42,71 @@ export class ToolSandbox {
       ? new Set(options.allowedFetchHostnames.map((host) => host.toLowerCase()))
       : null;
     this.maxFetchResponseBytes = options.maxFetchResponseBytes ?? 1024 * 1024;
+    this.errorOutputKeys = options.errorOutputKeys ?? ['error'];
+    this.timeoutMs = options.timeoutMs ?? 3000;
+    this.beforeSandboxRun = options.beforeSandboxRun;
+    this.afterSandboxRun = options.afterSandboxRun;
   }
 
-  async run(toolCode: string, params: object, timeoutMs = 3000): Promise<SandboxResult> {
+  async run(toolCode: string, params: object, timeoutMs = this.timeoutMs): Promise<SandboxResult> {
     const startedAt = Date.now();
+    await this.beforeSandboxRun?.(toolCode, params);
 
     try {
       const ivm = await this.loadIsolatedVm();
       const output = await this.runWithIsolatedVm(ivm, toolCode, params, timeoutMs);
 
-      return {
+      return this.finalizeResult({
         success: true,
         output,
         executionTimeMs: Date.now() - startedAt
-      };
+      });
     } catch (error) {
       if (!this.isIsolatedVmLoadError(error)) {
-        return this.createFailureResult(error, startedAt);
+        return this.finalizeResult(this.createFailureResult(error, startedAt));
       }
 
       if (!this.allowUnsafeNodeVmFallback) {
-        return this.createFailureResult(
+        return this.finalizeResult(this.createFailureResult(
           new Error('isolated-vm is unavailable and unsafe Node vm fallback is disabled'),
           startedAt
-        );
+        ));
       }
 
       try {
         const output = await this.runWithNodeVm(toolCode, params, timeoutMs);
 
-        return {
+        return this.finalizeResult({
           success: true,
           output,
           executionTimeMs: Date.now() - startedAt
-        };
+        });
       } catch (fallbackError) {
-        return this.createFailureResult(fallbackError, startedAt);
+        return this.finalizeResult(this.createFailureResult(fallbackError, startedAt));
       }
     }
+  }
+
+  private async finalizeResult(result: SandboxResult): Promise<SandboxResult> {
+    const semanticError = result.success ? this.getStructuredOutputError(result.output) : undefined;
+    const finalized = semanticError
+      ? { ...result, success: false, error: semanticError }
+      : result;
+    await this.afterSandboxRun?.(finalized);
+    return finalized;
+  }
+
+  private getStructuredOutputError(output: unknown): string | undefined {
+    if (this.errorOutputKeys.length === 0 || output === null || typeof output !== 'object' || Array.isArray(output)) {
+      return undefined;
+    }
+
+    const record = output as Record<string, unknown>;
+    const key = this.errorOutputKeys.find((candidate) => record[candidate] !== undefined && record[candidate] !== null);
+    if (!key) return undefined;
+
+    const value = record[key];
+    return typeof value === 'string' ? value : JSON.stringify(value);
   }
 
   private async loadIsolatedVm(): Promise<IsolatedVm> {

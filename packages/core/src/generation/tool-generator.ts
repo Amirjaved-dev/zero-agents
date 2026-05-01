@@ -25,7 +25,7 @@ You must:
 6. Do not return empty schemas unless the tool truly takes or returns no structured data
 7. No markdown, no backticks, pure JSON only`;
 
-interface GeneratedToolPayload {
+export interface GeneratedToolPayload {
   name: string;
   description: string;
   code: string;
@@ -34,6 +34,15 @@ interface GeneratedToolPayload {
     output: object;
   };
   tags: string[];
+}
+
+export type ToolGenerationMessage = { role: 'system' | 'user'; content: string };
+
+export interface ToolGenerationPromptInput {
+  taskDescription: string;
+  baseSystemPrompt: string;
+  systemPromptAppend?: string;
+  runtimeHints: string[];
 }
 
 interface ZeroGChatCompletionResponse {
@@ -76,6 +85,16 @@ export interface ToolGeneratorOptions {
   openAiKey?: string;
   /** Override the 0G EVM RPC endpoint used by the compute broker. Defaults to the public 0G testnet. */
   zeroGBlockchainRpc?: string;
+  /** Extra instructions appended to the built-in tool-generation system prompt. */
+  systemPromptAppend?: string;
+  /** Runtime constraints included in the generation prompt, for example "use fetch, not require". */
+  runtimeHints?: string[];
+  /** Full prompt override for advanced integrations. */
+  createMessages?: (input: ToolGenerationPromptInput) => ToolGenerationMessage[];
+  /** Override or extend LLM response normalization before validation. */
+  normalizeGeneratedTool?: (raw: unknown) => GeneratedToolPayload;
+  beforeToolGeneration?: (taskDescription: string) => void | Promise<void>;
+  afterToolGeneration?: (tool: Tool) => void | Promise<void>;
 }
 
 export class ToolGenerator {
@@ -83,11 +102,18 @@ export class ToolGenerator {
   private readonly zeroGPrivateKey?: string;
   private readonly openAiKey?: string;
   private readonly zeroGBlockchainRpc: string;
+  private readonly systemPromptAppend?: string;
+  private readonly runtimeHints: string[];
+  private readonly createMessagesOverride?: (input: ToolGenerationPromptInput) => ToolGenerationMessage[];
+  private readonly normalizeGeneratedToolOverride?: (raw: unknown) => GeneratedToolPayload;
+  private readonly beforeToolGeneration?: (taskDescription: string) => void | Promise<void>;
+  private readonly afterToolGeneration?: (tool: Tool) => void | Promise<void>;
 
   constructor(options: ToolGeneratorOptions | boolean = {}) {
     if (typeof options === 'boolean') {
       this.fallbackToOpenAI = options;
       this.zeroGBlockchainRpc = ZERO_G_RPC_URL;
+      this.runtimeHints = [];
       return;
     }
 
@@ -95,19 +121,28 @@ export class ToolGenerator {
     this.zeroGPrivateKey = options.zeroGPrivateKey;
     this.openAiKey = options.openAiKey;
     this.zeroGBlockchainRpc = options.zeroGBlockchainRpc ?? ZERO_G_RPC_URL;
+    this.systemPromptAppend = options.systemPromptAppend;
+    this.runtimeHints = options.runtimeHints ?? [];
+    this.createMessagesOverride = options.createMessages;
+    this.normalizeGeneratedToolOverride = options.normalizeGeneratedTool;
+    this.beforeToolGeneration = options.beforeToolGeneration;
+    this.afterToolGeneration = options.afterToolGeneration;
   }
 
   async generateTool(taskDescription: string): Promise<Tool> {
+    await this.beforeToolGeneration?.(taskDescription);
     const responseText = await this.generateToolJson(taskDescription);
     const generatedTool = this.parseGeneratedTool(responseText);
 
-    return {
+    const tool = {
       ...generatedTool,
       id: randomUUID(),
       successRate: 0,
       usageCount: 0,
       createdAt: Date.now()
     };
+    await this.afterToolGeneration?.(tool);
+    return tool;
   }
 
   private async generateToolJson(taskDescription: string): Promise<string> {
@@ -204,11 +239,29 @@ export class ToolGenerator {
     return content;
   }
 
-  private createMessages(taskDescription: string): Array<{ role: 'system' | 'user'; content: string }> {
+  createMessages(taskDescription: string): ToolGenerationMessage[] {
+    if (this.createMessagesOverride) {
+      return this.createMessagesOverride({
+        taskDescription,
+        baseSystemPrompt: TOOL_GENERATION_SYSTEM_PROMPT,
+        systemPromptAppend: this.systemPromptAppend,
+        runtimeHints: this.runtimeHints
+      });
+    }
+
+    const additions = [
+      this.systemPromptAppend,
+      this.runtimeHints.length > 0
+        ? `Runtime hints:\n${this.runtimeHints.map((hint) => `- ${hint}`).join('\n')}`
+        : undefined
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
     return [
       {
         role: 'system',
-        content: TOOL_GENERATION_SYSTEM_PROMPT
+        content: additions.length > 0
+          ? `${TOOL_GENERATION_SYSTEM_PROMPT}\n\n${additions.join('\n\n')}`
+          : TOOL_GENERATION_SYSTEM_PROMPT
       },
       {
         role: 'user',
@@ -221,7 +274,7 @@ export class ToolGenerator {
     return this.openAiKey ?? process.env.OPENAI_API_KEY;
   }
 
-  private parseGeneratedTool(responseText: string): GeneratedToolPayload {
+  parseGeneratedTool(responseText: string): GeneratedToolPayload {
     let parsed: unknown;
 
     try {
@@ -230,11 +283,52 @@ export class ToolGenerator {
       throw new Error(`Tool generation response was not valid JSON: ${this.getErrorMessage(error)}`);
     }
 
-    if (!this.isGeneratedToolPayload(parsed)) {
+    const normalized = this.normalizeGeneratedToolOverride
+      ? this.normalizeGeneratedToolOverride(parsed)
+      : this.normalizeGeneratedTool(parsed);
+
+    if (!this.isGeneratedToolPayload(normalized)) {
       throw new Error('Tool generation response does not match the expected tool schema');
     }
 
-    return parsed;
+    return normalized;
+  }
+
+  normalizeGeneratedTool(raw: unknown): GeneratedToolPayload {
+    const candidate = this.unwrapGeneratedTool(raw);
+    if (this.isGeneratedToolPayload(candidate)) {
+      return candidate;
+    }
+
+    if (!this.isRecord(candidate)) {
+      throw new Error('Tool generation response did not contain an object payload');
+    }
+
+    const code = this.getString(candidate.code) ?? this.getString(candidate.functionCode) ?? this.getString(candidate.execute);
+    const name = this.getString(candidate.name) ?? this.getString(candidate.toolName) ?? 'generated_tool';
+    const description = this.getString(candidate.description) ?? this.getString(candidate.summary) ?? 'Generated tool';
+    const schema = this.isRecord(candidate.schema) ? candidate.schema : {};
+    const input = this.isRecord(schema.input) ? schema.input : {};
+    const output = this.isRecord(schema.output) ? schema.output : {};
+    const tags = Array.isArray(candidate.tags) ? candidate.tags.filter((tag): tag is string => typeof tag === 'string') : [];
+
+    if (!code) {
+      throw new Error('Tool generation response did not include executable code');
+    }
+
+    return { name, description, code, schema: { input, output }, tags };
+  }
+
+  private unwrapGeneratedTool(raw: unknown): unknown {
+    if (Array.isArray(raw)) {
+      return raw[0];
+    }
+
+    if (!this.isRecord(raw)) {
+      return raw;
+    }
+
+    return raw.tool ?? raw.generatedTool ?? raw.result ?? raw.data ?? raw;
   }
 
   private isGeneratedToolPayload(value: unknown): value is GeneratedToolPayload {
@@ -269,6 +363,10 @@ export class ToolGenerator {
 
   private isRecord(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  private getString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
   }
 
   private getErrorMessage(error: unknown): string {

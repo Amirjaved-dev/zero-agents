@@ -33,6 +33,19 @@ test('returns failure result when code throws', async () => {
   assert.ok(result.error?.includes('boom'), `Expected error to include "boom", got: ${result.error}`);
 });
 
+test('treats structured error output as failure by default', async () => {
+  const sandbox = createDevSandbox();
+  const result = await sandbox.run('async function execute(params) { return { error: "API failed" }; }', {});
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'API failed');
+});
+
+test('can disable structured error output failure semantics', async () => {
+  const sandbox = new ToolSandbox({ allowUnsafeNodeVmFallback: true, errorOutputKeys: [] });
+  const result = await sandbox.run('async function execute(params) { return { error: "still data" }; }', {});
+  assert.equal(result.success, true);
+});
+
 test('returns object output correctly', async () => {
   const sandbox = createDevSandbox();
   const result = await sandbox.run(

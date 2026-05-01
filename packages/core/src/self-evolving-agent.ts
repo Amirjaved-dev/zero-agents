@@ -1,15 +1,15 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { EvolutionEngine, type EvolutionEvent } from './evolution-engine.js';
-import { ToolGenerator } from './generation/tool-generator.js';
+import { ToolGenerator, type ToolGeneratorOptions } from './generation/tool-generator.js';
 import { ToolEvaluator, type EvalResult } from './sandbox/tool-evaluator.js';
-import { ToolSandbox } from './sandbox/tool-sandbox.js';
-import { ToolRegistry, type Tool } from './storage/tool-registry.js';
+import { ToolSandbox, type ToolSandboxOptions } from './sandbox/tool-sandbox.js';
+import { ToolRegistry, type Tool, type ToolRegistryOptions } from './storage/tool-registry.js';
 import type { AgentIdentityProvider, AgentProfile } from './identity/types.js';
 import { ENSIdentityManager } from './identity/ens-identity-manager.js';
 import { AgentCoordinator } from './communication/agent-coordinator.js';
 import { AXLClient } from './communication/axl-client.js';
-import { ReflectionEngine, type ReflectionResult } from './reflection/reflection-engine.js';
+import { ReflectionEngine, type ReflectionEngineOptions, type ReflectionResult } from './reflection/reflection-engine.js';
 import { ExperienceMemory } from './memory/experience-memory.js';
 import { StrategyAdapter, type StrategyDecision, type StrategyName } from './evolution/strategy-adapter.js';
 import { ToolImprover, type ImprovedToolCandidate } from './tools/tool-improver.js';
@@ -42,6 +42,19 @@ export interface SelfEvolvingAgentConfig {
   indexCacheTtlMs?: number;
   /** Local JSON path for task experience memory. Defaults to .zero-agent-experiences.json. */
   experienceMemoryPath?: string;
+  /** First-class registry configuration. Overrides legacy registry/storage fields when present. */
+  registry?: ToolRegistryOptions;
+  /** First-class sandbox configuration. */
+  sandbox?: ToolSandboxOptions;
+  /** First-class tool-generation configuration. */
+  toolGeneration?: ToolGeneratorOptions;
+  /** First-class reflection configuration. */
+  reflection?: ReflectionEngineOptions;
+  /** Return false to answer directly instead of searching/generating/executing tools. */
+  shouldExecute?: (task: TaskRequest) => boolean | Promise<boolean>;
+  /** Direct response used when shouldExecute returns false or the built-in chat gate catches trivial chat. */
+  directResponse?: (task: TaskRequest, agent: SelfEvolvingAgent) => unknown | Promise<unknown>;
+  hooks?: SelfEvolvingAgentHooks;
 }
 
 export interface AgentConfig {
@@ -56,6 +69,24 @@ export interface AgentConfig {
   experienceMemoryPath?: string;
   /** Development-only fallback for environments where isolated-vm is unavailable. Default: false. */
   allowUnsafeNodeVmFallback?: boolean;
+  registry?: ToolRegistryOptions;
+  sandbox?: ToolSandboxOptions;
+  toolGeneration?: ToolGeneratorOptions;
+  reflection?: ReflectionEngineOptions;
+  shouldExecute?: (task: TaskRequest) => boolean | Promise<boolean>;
+  directResponse?: (task: TaskRequest, agent: SelfEvolvingAgent) => unknown | Promise<unknown>;
+  hooks?: SelfEvolvingAgentHooks;
+}
+
+export interface SelfEvolvingAgentHooks {
+  beforeToolGeneration?: ToolGeneratorOptions['beforeToolGeneration'];
+  afterToolGeneration?: ToolGeneratorOptions['afterToolGeneration'];
+  normalizeGeneratedTool?: ToolGeneratorOptions['normalizeGeneratedTool'];
+  beforeSandboxRun?: ToolSandboxOptions['beforeSandboxRun'];
+  afterSandboxRun?: ToolSandboxOptions['afterSandboxRun'];
+  beforeReflection?: ReflectionEngineOptions['beforeReflection'];
+  afterReflection?: ReflectionEngineOptions['afterReflection'];
+  shouldCreateTool?: (task: TaskRequest, availableTools: Tool[]) => boolean | Promise<boolean>;
 }
 
 export interface AgentState {
@@ -106,6 +137,9 @@ export class SelfEvolvingAgent extends EventEmitter {
   private identity?: AgentIdentityProvider;
   private readonly axlClient: AXLClient;
   private readonly axlEnabled: boolean;
+  private readonly shouldExecute?: (task: TaskRequest) => boolean | Promise<boolean>;
+  private readonly directResponse?: (task: TaskRequest, agent: SelfEvolvingAgent) => unknown | Promise<unknown>;
+  private readonly hooks?: SelfEvolvingAgentHooks;
   private axlReady?: Promise<void>;
   private ensAutoDetect?: Promise<ENSIdentityManager | null>;
   private coordinator?: AgentCoordinator;
@@ -135,17 +169,38 @@ export class SelfEvolvingAgent extends EventEmitter {
     const evolutionTimeoutMs = 'evolutionTimeoutMs' in config ? config.evolutionTimeoutMs : undefined;
     const testCaseTimeoutMs = 'testCaseTimeoutMs' in config ? config.testCaseTimeoutMs : undefined;
     const axlPollIntervalMs = config.axlPollIntervalMs;
+    this.shouldExecute = config.shouldExecute;
+    this.directResponse = config.directResponse;
+    this.hooks = config.hooks;
 
     this.registry = new ToolRegistry({
       indexPointerPath: config.registryPath,
       zeroGPrivateKey,
       indexCacheTtlMs,
       zeroGBlockchainRpc,
-      zeroGIndexerRpc
+      zeroGIndexerRpc,
+      ...config.registry
     });
-    const generator = new ToolGenerator({ zeroGPrivateKey, openAiKey, zeroGBlockchainRpc });
-    this.sandbox = new ToolSandbox({ allowUnsafeNodeVmFallback: config.allowUnsafeNodeVmFallback });
-    this.reflectionEngine = new ReflectionEngine();
+    const generator = new ToolGenerator({
+      zeroGPrivateKey,
+      openAiKey,
+      zeroGBlockchainRpc,
+      ...config.toolGeneration,
+      beforeToolGeneration: config.hooks?.beforeToolGeneration ?? config.toolGeneration?.beforeToolGeneration,
+      afterToolGeneration: config.hooks?.afterToolGeneration ?? config.toolGeneration?.afterToolGeneration,
+      normalizeGeneratedTool: config.hooks?.normalizeGeneratedTool ?? config.toolGeneration?.normalizeGeneratedTool
+    });
+    this.sandbox = new ToolSandbox({
+      allowUnsafeNodeVmFallback: config.allowUnsafeNodeVmFallback,
+      ...config.sandbox,
+      beforeSandboxRun: config.hooks?.beforeSandboxRun ?? config.sandbox?.beforeSandboxRun,
+      afterSandboxRun: config.hooks?.afterSandboxRun ?? config.sandbox?.afterSandboxRun
+    });
+    this.reflectionEngine = new ReflectionEngine({
+      ...config.reflection,
+      beforeReflection: config.hooks?.beforeReflection ?? config.reflection?.beforeReflection,
+      afterReflection: config.hooks?.afterReflection ?? config.reflection?.afterReflection
+    });
     this.experienceMemory = new ExperienceMemory({ filePath: config.experienceMemoryPath });
     this.strategyAdapter = new StrategyAdapter();
     this.toolImprover = new ToolImprover({ generator });
@@ -207,6 +262,13 @@ export class SelfEvolvingAgent extends EventEmitter {
 
     try {
       await this.ensureIdentityReady();
+      if (!(await this.shouldExecuteTask(task))) {
+        const result = await this.createDirectTaskResult(task, startedAt);
+        await this.reflectAndSaveExperience(task, result, 'reject_task');
+        this.emitStep({ type: 'done', message: 'Task answered without tool execution.', data: result });
+        return result;
+      }
+
       this.emitStep({ type: 'search', message: 'Searching for existing tool...', data: { task } });
 
       const tools = await this.registry.searchTools(task.description);
@@ -236,6 +298,18 @@ export class SelfEvolvingAgent extends EventEmitter {
       let wasGenerated = false;
 
       if (!tool || tool.successRate <= 0.5 || strategyDecision.strategy !== 'reuse_existing_tool') {
+        if (this.hooks?.shouldCreateTool && !(await this.hooks.shouldCreateTool(task, tools))) {
+          const result = await this.createDirectTaskResult(task, startedAt);
+          this.applyStrategyMetadata(result, this.createActualStrategyDecision(
+            strategyDecision,
+            'reject_task',
+            'Tool creation was skipped by the configured shouldCreateTool hook.'
+          ));
+          await this.reflectAndSaveExperience(task, result, 'reject_task');
+          this.emitStep({ type: 'done', message: 'Task answered without creating a tool.', data: result });
+          return result;
+        }
+
         this.emitStep({ type: 'miss', message: 'No tool found. Generating new tool...', data: { task } });
         strategy = 'generate_new_tool';
         resultStrategyDecision = this.createActualStrategyDecision(
@@ -396,6 +470,60 @@ export class SelfEvolvingAgent extends EventEmitter {
       confidence: decision.confidence,
       wasImproved: false
     };
+  }
+
+  protected async createDirectTaskResult(task: TaskRequest, startedAt = Date.now()): Promise<TaskResult> {
+    const output = this.directResponse
+      ? await this.directResponse(task, this)
+      : this.createDefaultDirectResponse(task);
+
+    return {
+      output,
+      toolUsed: '',
+      wasGenerated: false,
+      executionTimeMs: Date.now() - startedAt,
+      strategy: 'reject_task',
+      strategyReason: 'Task was classified as not requiring tool execution.',
+      confidence: 0.9,
+      wasImproved: false
+    };
+  }
+
+  protected async shouldExecuteTask(task: TaskRequest): Promise<boolean> {
+    const configured = await this.shouldExecute?.(task);
+    if (configured !== undefined) {
+      return configured;
+    }
+
+    return !this.isTrivialChatTask(task.description);
+  }
+
+  protected createDefaultDirectResponse(task: TaskRequest): unknown {
+    const normalized = task.description.trim().toLowerCase().replace(/[?!.,]+$/g, '');
+    if (this.isCapabilityQuestion(normalized)) {
+      return {
+        message: this.capabilities.length > 0
+          ? `I can help with: ${this.capabilities.join(', ')}.`
+          : 'I can search for reusable tools, generate new tools when needed, execute them in a sandbox, and remember the outcome.'
+      };
+    }
+
+    return { message: `Hi, I am ${this.name}. Ask me to do a concrete task and I will use or create tools when needed.` };
+  }
+
+  protected isTrivialChatTask(description: string): boolean {
+    const normalized = description.trim().toLowerCase().replace(/[?!.,]+$/g, '');
+    if (!normalized) return true;
+
+    return this.isGreeting(normalized) || this.isCapabilityQuestion(normalized);
+  }
+
+  private isGreeting(normalizedDescription: string): boolean {
+    return /^(hi|hello|hey|yo|sup|gm|good morning|good afternoon|good evening)(\s+there)?$/.test(normalizedDescription);
+  }
+
+  private isCapabilityQuestion(normalizedDescription: string): boolean {
+    return /^(what can you do|what are your capabilities|what abilities (do )?you have|what abilities u have|what can u do|do you know me)$/.test(normalizedDescription);
   }
 
   protected findSelectedTool(tools: Tool[], decision: StrategyDecision): Tool | null {
