@@ -8,7 +8,7 @@ This README documents the core package only.
 
 ## Status
 
-- Package version: `0.1.1`
+- Package version: `0.1.2`
 - Runtime: Node.js `>=20`
 - Module format: ESM only
 - Main entry: `@zero-agents/core`
